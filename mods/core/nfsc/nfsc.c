@@ -82,7 +82,7 @@ POP_MOD_DECLARE_ABI();
 #define HUD_RIGHT_GROUP 0x5D0101F1u
 
 static const PopModApi *g_api;
-static uint32_t g_hooks[25];
+static uint32_t g_hooks[26];
 static int g_widescreen = 1;
 static int g_scaling = 1;
 static uint32_t g_w = 1280, g_h = 720;
@@ -529,7 +529,7 @@ PopModStatus pop_mod_init(const PopModApi *api) {
         if (api->guest_alloc(api, 8, &g_scratch) != POP_OK)
             g_scratch = 0;
         /* The mirror and picture-in-picture shapes; widescreen works without them. */
-        if (install(BUILD_SCREEN_QUAD, quad_enter, POP_HOOK_BEFORE, 13) != POP_OK ||
+        if (install(BUILD_SCREEN_QUAD, quad_enter, POP_HOOK_BEFORE, 25) != POP_OK ||
             install(BUILD_SCREEN_QUAD, quad_leave, POP_HOOK_AFTER, 15) != POP_OK)
             log_line("core.nfsc: the mirror is not narrowed for the wide screen");
         if ((s = install(SET_WIDESCREEN_MODE, widescreen_mode_enter, POP_HOOK_BEFORE, 2)) != POP_OK ||
