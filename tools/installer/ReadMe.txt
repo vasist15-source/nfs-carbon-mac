@@ -17,7 +17,8 @@ Then:
   1. Choose your game folder, or drop it on the window. The app checks NFSC.exe first and changes
      nothing if it can't be used.
   2. If asked, install Apple's Command Line Tools (free; the app waits for them).
-  3. Optional: tick "Controller button icons" to download the controller button pictures.
+  3. Optional: tick "Controller button icons" to download the controller button pictures, and
+     "HD menus, HUD and fonts" for the Remastered UI texture pack (adds about 300 MB to the app).
   4. Click Build. When it finishes, click "Open the game".
 
 In the game: F10 (fn+F10 on a Mac keyboard) opens the settings: full screen, borderless or windowed,

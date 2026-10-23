@@ -44,17 +44,20 @@ icons).
   - Mods: skip intro movies, hide the closed online modes, how much you see to the sides, no
     rubberbanding (opponents don't catch up), and cheats (off by default: infinite nitrous and
     speedbreaker, engine power, opponent engine power).
-  - Controller: console layout on/off and which button names to show (automatic, Xbox,
-    PlayStation, Switch Pro).
+  - Controller: console layout on/off, looking around with the right stick on/off, rumble
+    strength, and which button names to show (automatic, Xbox, PlayStation, Switch Pro).
 - **Controllers** (a port of NFS-XtendedInput): the console layout (RT gas, LT brake, A handbrake,
-  B nitrous, X speedbreaker, Y crew, LB look back, RB camera, right stick to shift), triggers as analog
-  pedals, console-style menu prompts while a pad is in use, and the controller's own button names
+  B nitrous, X speedbreaker, Y crew, RB/LB shift up/down, RS click look back, d-pad down camera),
+  triggers as analog pedals, rumble from the game's own force feedback (crashes and road surfaces),
+  console-style menu prompts while a pad is in use, and the controller's own button names
   (Xbox, PlayStation, Switch Pro). Remapping in Options → Controls still works.
+- **Look around with the right stick** while driving, like modern racing games: push it the way you
+  want to look (down looks behind) and the camera glides back behind the car when you let go.
 - **HD menus, HUD and fonts** (optional, a checkbox in the Setup app): NFS Carbon Remastered UI by
   BadassBaboon, downloaded from nfsmods.xyz and installed into the app's own copy of the game, with
   the fonts and cursor kept at their original size as Aero_'s HD Content Support does on Windows.
-  Menus, HUD, fonts, the world map, minimap and track maps are HD; the barrier arrows on the tracks
-  are not yet. Adds about 1 GB to the app.
+  Menus, HUD, fonts, the world map, minimap, track maps and the neon barrier arrows on the tracks
+  are HD. Adds about 300 MB to the app.
 
 
 ## What you need
@@ -90,7 +93,8 @@ changes (history in `docs/kit-patches/` and git). This repository adds what make
 
 - `game.toml`: the game's identity, extra entry points, and translate-time fixes (operand redirects,
   instruction patches) that stand in for the binary patches PC mods make.
-- `mods/core/nfsc/`: the built-in mod (widescreen, resolution list, controller layout and prompts).
+- `mods/core/nfsc/`: the built-in mod (widescreen, resolution list, controller layout, prompts,
+  rumble and right-stick camera, cheats).
 - `tools/`: Ghidra analysis, DLL rebasing, build wrappers, and `setup_kit/` (packaging, launcher, icon).
 - `CLAUDE.md`: the bring-up notes — every problem found, its evidence and its fix.
 

@@ -148,11 +148,9 @@ Explain findings plainly and keep commands copy-pasteable.
   the v0.5 layout (rows 7/8/24/25 primary exactly old). Setting right_stick_camera (controls, live).
   One-time log lines "right-stick camera running" / "right stick first pushed". Idea from ThirteenAG's
   Camera.ixx (free look, rate-based; not its feel). If left/right feel swapped: flip the sign of `want`.
-- Remove online options: NOT done. Main menu state 00843690 (FeMainMenu.fng), carousel
-  FeMainMenu_Sub.fng actions in 005a5560 (switch on choice 1..9; 2/3 -> 00845640 arg 1/2,
-  vtable 009f82d0, maybe Online/LAN). Item labels are not bStringHash'd names found in the
-  exe (tried MM_*/MAINMENU_*); likely defined in the FE package data. Next: find the
-  carousel item list (who fills FeMainMenu_Sub's options) or hook the choice handler.
+- Online menu entries: DONE in mods/core/nfsc/online.h (setting hide_online, default on): the carousel
+  builder 0083c420 adds items with 005b2320; the Quick Match / Custom Match adds (return 0083c611 /
+  0083c5c3) are skipped. (Old notes: main menu state 00843690, carousel actions 005a5560.)
 - Full resolution list + Display mode (git 579ed7d, CONFIRMED by the user 2026-10-10: 1920x1080
   letterboxed correctly, no stretch; F10 (fn+F10) Window row switches modes): list =
   screen/1..4 ("(native)" on k=1) + common 4:3/16:10/16:9/21:9 sizes <= screen, sorted by
@@ -254,7 +252,7 @@ Explain findings plainly and keep commands copy-pasteable.
   RAWW storage makes DYNTEX 50 MB, WMDYNTEX 154 MB, minimaps ~108 MB each, TRACKMAPS 101 MB
   (a JDLZ compressor would shrink them). Still skipped: streamed L5RA textures (barrier arrows,
   unpack_stream/pack_stream).
-- SMALLER APP + BARRIER ARROWS (2026-10-20, built, NOT yet run): tools/setup_kit/jdlz.c (cc'd once into the
+- SMALLER APP + BARRIER ARROWS (2026-10-20; shipped in release v0.1.13): tools/setup_kit/jdlz.c (cc'd once into the
   Setup cache, ctypes; self-checks each block) packs changed compressed-pack textures in 32 KB JDLZ parts
   (fits_in_place-checked, plain fallback) and re-JDLZes rewritten .lzc files: HD UI growth ~1 GB -> ~300 MB.
   Stream sections: unpack_stream registers TEMP/<section>/DATA.BIN as virtual files (read from the stream at the
@@ -538,7 +536,13 @@ Explain findings plainly and keep commands copy-pasteable.
   (or let `kit/tools/discover.py` collect more like them). Constructors "returning 0"
   leave objects unbuilt, the likely cause of the stall.
 - Also seen, lower priority: one thread calls address 00000000 (return 0fdfff00,
-  all registers 0) → access violation, unhandled; registry install key missing, so
+  all registers 0) → access violation, unhandled. FOUND 2026-10-24: it is guest thread 5,
+  CreateThread start=0094c740, a real function missing from the analysis (only reached as a thread
+  start): DirtySock-style idle thread, `while ([0xbcbfbc]) { 0097ea10(); Sleep(50); }`, running flag
+  [0xa83744]; 0097ea10 runs the registered network idle callbacks (0xbcc028 table) under a try-lock.
+  The thread never runs in the port (offline play unaffected so far). Fix if ever needed: add
+  0x0094c740 to entry_points (+ --regenerate). Left alone on purpose: it would start a thread that
+  has never run here. Also: registry install key missing, so
   `Install Dir` (read in 007346b0, along with CD Drive, FirstTime, CacheSize,
   SwapSize, Language, StreamingInstall) falls back; it then looks for
   `C:\Program Files\EA GAMES\Need for Speed Carbon/NFS\ZDIR.BIN` (guest_root maps

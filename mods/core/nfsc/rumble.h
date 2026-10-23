@@ -16,7 +16,11 @@
 #define FFB_ROAD 0x00735270u
 #include <math.h>
 #include <stddef.h>
-/* Controller rumble from the PC 1.3 force-feedback update.
+/* The MW port's notes, kept for how the bridge works. Every address and "Test" number in
+ * them is the MW PC 1.3 exe's or its test runs', not Carbon's: MW's 006dc800 / 006dcda0
+ * are Carbon's 00734cd0 / 00735270 above, and the surface table was read from MW.
+ *
+ * Controller rumble from the PC 1.3 force-feedback update.
  *
  * The per-frame FFB update (around 006432e0, wrapper at [009203c4], device 0 = player 1)
  * builds DirectInput effects for a wheel. A gamepad has no force axes, so those effects
