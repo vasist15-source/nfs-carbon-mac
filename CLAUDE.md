@@ -132,6 +132,22 @@ Explain findings plainly and keep commands copy-pasteable.
   image otherwise). Menu cursor: redirect 00731665 FMUL 640.0 -> slot 0xc2b41c = 2*centre
   (480*aspect); fixed the right-side wall (CONFIRMED 2026-10-10).
   F10 page: game.toml [settings] page = "tabs" (choice names; Controls tab), touch rows removed.
+- Right-stick camera (mods/core/nfsc/camera.h) CONFIRMED by the user 2026-10-23 (Switch Pro). PS/Xbox pads:
+  no code needed (the kit reads every pad through SDL_Gamepad: same right-stick axes, buttons by position),
+  untested by the user (no such pads). User chose full 360 deg
+  (stick direction = look direction, down = behind) with shifting moved off the stick; release eases back
+  (tau 0.15 s; follow tau 0.07 s, dead zone 0.30). Callsite BEFORE hook (slot 24) on eCreateLookAtMatrix
+  0071b430 (cdecl out, eye, target, up; Z up) from CubicCameraMover::Update 004921b0 (call 00492e5b, ret
+  00492e60; mover in ESI, dt at [ebp+8]); view type [mover+0xac] (0 bumper, 1 hood, 2..4 chase; 00486500
+  maps 1:1), look-back flag [mover+0xb1]. Chase: eye orbits the target; bumper/hood: target turns around
+  the eye; the up vector turns too. Stick = device state +0x8 (lZ) / +0x214 (lRz), 0..65535 (the
+  game's data format: X Y Z at +0/+4/+8, Rx Ry Rz at +0x20c..; +0x208 is a button, read there first by
+  mistake -> camera stuck sideways, x = -1, 2026-10-23); an axis a
+  driving row (0..28 but 23) is bound to is left to it. Layout now: RB shift up, LB shift down, RS click
+  look back, d-pad down camera change, LS click next song; pad_move_old_layout moves profiles saved with
+  the v0.5 layout (rows 7/8/24/25 primary exactly old). Setting right_stick_camera (controls, live).
+  One-time log lines "right-stick camera running" / "right stick first pushed". Idea from ThirteenAG's
+  Camera.ixx (free look, rate-based; not its feel). If left/right feel swapped: flip the sign of `want`.
 - Remove online options: NOT done. Main menu state 00843690 (FeMainMenu.fng), carousel
   FeMainMenu_Sub.fng actions in 005a5560 (switch on choice 1..9; 2/3 -> 00845640 arg 1/2,
   vtable 009f82d0, maybe Online/LAN). Item labels are not bStringHash'd names found in the

@@ -23,7 +23,8 @@ Third-party work this port reimplements:
 
 - NFSCarbon.WidescreenFix, part of WidescreenFixesPack by ThirteenAG
   (github.com/ThirteenAG/WidescreenFixesPack). Its resolution and field-of-view
-  changes are reimplemented in mods/core/nfsc and game.toml. Its license:
+  changes are reimplemented in mods/core/nfsc and game.toml, and the right-stick
+  camera (mods/core/nfsc/camera.h) follows its free look's hook. Its license:
 
   MIT License
 

@@ -73,15 +73,15 @@ static void pad_layout(unsigned port) {
         {4, 2, 1, 0, 0},  /* handbrake: A */
         {5, 2, 0, 0, 0},  /* speedbreaker: X */
         {6, 2, 2, 0, 0},  /* nitrous: B */
-        {7, 7, 2, 0, 0},  /* shift down: right stick down */
-        {8, 6, 2, 0, 0},  /* shift up: right stick up */
+        {7, 2, 4, 0, 0},  /* shift down: LB (the right stick is the camera, camera.h) */
+        {8, 2, 5, 0, 0},  /* shift up: RB */
         {18, 2, 8, 0, 0}, /* reset car: Back */
         {19, 2, 3, 0, 0}, /* crew: Y */
         {20, 3, 0, 0, 0}, /* engage event: d-pad up */
         {21, 3, 3, 0, 0}, {22, 3, 1, 0, 0}, /* HUD pad left/right: d-pad */
         {23, 2, 10, 0, 0}, /* FE button 2: LS click */
-        {24, 2, 5, 0, 0}, /* camera: RB */
-        {25, 2, 4, 0, 0}, /* look back: LB */
+        {24, 3, 2, 0, 0}, /* camera: d-pad down */
+        {25, 2, 11, 0, 0}, /* look back: RS click */
         {28, 2, 9, 0, 0}, /* pause: Start */
         {29, 3, 3, 4, 0}, {30, 3, 1, 5, 0}, {31, 3, 0, 4, 1}, {32, 3, 2, 5, 1}, /* menus: d-pad, left stick */
         {33, 4, 2, 0, 0}, {34, 5, 2, 0, 0}, {35, 6, 2, 0, 0}, {36, 7, 2, 0, 0}, /* menus: right stick */
@@ -95,7 +95,7 @@ static void pad_layout(unsigned port) {
         {45, 2, 0, 0, 0}, /* FE button 4: X */
         {46, 2, 3, 0, 0}, /* FE button 5: Y */
         {47, 2, 1, 0, 0}, /* skip cutscene: A */
-        {48, 2, 11, 0, 0}, /* next song: RS click */
+        {48, 2, 10, 0, 0}, /* next song: LS click */
     };
     for (unsigned r = 0; r < PAD_DEFAULT_ROWS; ++r) {
         pad_set(port, r, 0, 0, 0);
@@ -106,6 +106,28 @@ static void pad_layout(unsigned port) {
         pad_set(port, rows[i].row, 1, rows[i].kind2, rows[i].control2);
     }
     g_pad_seen_valid[port] = 0;
+}
+
+/* The console layout before the right-stick camera (v0.5): shifting on the
+ * right stick, camera RB, look back LB, next song RS click. A port still
+ * exactly so (the old layout saved in a profile) gets those rows moved; a
+ * remap of any of rows 7, 8, 24, 25 (primary slot) makes the port theirs. */
+static const struct { uint8_t row, old_kind, old_control, kind, control; } kPadMoved[] = {
+    {7, 7, 2, 2, 4}, {8, 6, 2, 2, 5}, {24, 2, 5, 3, 2}, {25, 2, 4, 2, 11}, {48, 2, 11, 2, 10},
+};
+static int pad_move_old_layout(unsigned port) {
+    for (unsigned i = 0; i < 4; ++i) { /* row 48 alone does not decide */
+        uint32_t at = pad_triple(kPadMoved[i].row, 2u * port + 2u);
+        if (!at || get_u32(at) != kPadMoved[i].old_kind || get_u32(at + 8) != kPadMoved[i].old_control)
+            return 0;
+    }
+    for (unsigned i = 0; i < sizeof kPadMoved / sizeof kPadMoved[0]; ++i) {
+        uint32_t at = pad_triple(kPadMoved[i].row, 2u * port + 2u);
+        if (at && get_u32(at) == kPadMoved[i].old_kind && get_u32(at + 8) == kPadMoved[i].old_control)
+            pad_set(port, kPadMoved[i].row, 0, kPadMoved[i].kind, kPadMoved[i].control);
+    }
+    g_pad_seen_valid[port] = 0;
+    return 1;
 }
 
 /* The game's PC layout, untouched: gas, brake, handbrake, Speedbreaker and
@@ -203,13 +225,19 @@ static void pad_update_hook(const PopModApi *api, pop_cpu_v1 *cpu, PopHookInvoca
         if (g_pad_generic_valid[p])
             pad_watch(p);
     if (layout)
-        for (unsigned p = 0; p < pad_ports(); ++p)
+        for (unsigned p = 0; p < pad_ports(); ++p) {
             if (g_pad_generic_valid[p] && pad_rows_are_generic(p)) {
                 pad_layout(p);
                 char line[96];
                 snprintf(line, sizeof line, "core.nfsc: controller %u had the PC defaults; console layout applied", p);
                 log_line(line);
+            } else if (g_pad_generic_valid[p] && pad_move_old_layout(p)) {
+                char line[128];
+                snprintf(line, sizeof line,
+                         "core.nfsc: controller %u had the old console layout; shifting moved to LB/RB, camera to d-pad down, look back to RS click", p);
+                log_line(line);
             }
+        }
     api->call_original(api, cpu->target, cpu);
     uint32_t values = get_u32(self + 0x20);
     if (get_u32(self + 0x24) != 0 || !values)
