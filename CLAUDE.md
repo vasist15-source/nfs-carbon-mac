@@ -425,7 +425,7 @@ Explain findings plainly and keep commands copy-pasteable.
    scale -> colour key -> encode (simple bounding-box DXT encoder). Source is the
    surface's CPU copy. Callers: 007d7580 (texture copy when formats differ),
    00759040 (per mip), 00732ca0 (boot).
-18. Brightness (git, 2026-10-10, built, NOT yet run): Dev_SetGammaRamp/GetGammaRamp store the
+18. Brightness (git, 2026-10-10; CONFIRMED working by the user 2026-10-24): Dev_SetGammaRamp/GetGammaRamp store the
    D3DGAMMARAMP and call host_set_gamma_ramp (dx/host_api.h, weak no-op default); host/compositor.cpp
    keeps 17 samples per channel and the Metal compositor_fragment applies them (Quad.pad = 1, Quad
    grew a float4 gamma[17]) to every draw except the settings page. Identity ramp = off. Metal only:
