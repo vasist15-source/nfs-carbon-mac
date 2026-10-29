@@ -31,6 +31,14 @@
 #include <utility>
 #include <vector>
 
+// Liquid Glass needs the macOS 26 SDK; the Setup app builds this on players' Macs with whatever
+// Command Line Tools they have, and an older SDK gets the HUD material only.
+#if __has_include(<AppKit/NSGlassEffectView.h>)
+#define POP_HAVE_GLASS_VIEW 1
+#else
+#define POP_HAVE_GLASS_VIEW 0
+#endif
+
 @interface PopMenuGlassContainer : NSView
 @end
 @implementation PopMenuGlassContainer
@@ -166,6 +174,7 @@ NSView *find_metal_view(NSView *v) {
 }
 
 NSView *make_glass() {
+#if POP_HAVE_GLASS_VIEW
     if (@available(macOS 26.0, *)) {
         NSGlassEffectView *g = [[NSGlassEffectView alloc] initWithFrame:NSZeroRect];
         g.style = NSGlassEffectViewStyleRegular;
@@ -173,6 +182,7 @@ NSView *make_glass() {
         g.tintColor = [NSColor colorWithWhite:0.0 alpha:0.34];
         return g;
     }
+#endif
     NSVisualEffectView *v = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
     v.material = NSVisualEffectMaterialHUDWindow;
     v.blendingMode = NSVisualEffectBlendingModeWithinWindow;
@@ -185,12 +195,14 @@ NSView *make_glass() {
 }
 
 void set_radius(NSView *glass, CGFloat r) {
+#if POP_HAVE_GLASS_VIEW
     if (@available(macOS 26.0, *)) {
         if ([glass isKindOfClass:[NSGlassEffectView class]]) {
             ((NSGlassEffectView *)glass).cornerRadius = r;
             return;
         }
     }
+#endif
     glass.layer.cornerRadius = r;
 }
 
@@ -238,8 +250,10 @@ void install(SDL_Window *window) {
     mods_menu_set_style(1, r, g, b);
     g_active = true;
     bool glass26 = false;
+#if POP_HAVE_GLASS_VIEW
     if (@available(macOS 26.0, *))
         glass26 = true;
+#endif
     fprintf(stderr, "[host] settings menu on native %s\n", glass26 ? "Liquid Glass" : "HUD material");
 }
 

@@ -36,7 +36,8 @@ icons).
 - **Widescreen** (a port of ThirteenAG's widescreen fix): any resolution and aspect ratio in
   Options → Video, from 640×480 to 4K, including the screen's native sizes. The field of view is
   Hor+ and the HUD is moved out to the edges.
-- **Settings page (F10**, fn+F10 on a Mac keyboard):
+- **Settings page (F10**, fn+F10 on a Mac keyboard), on a native macOS Liquid Glass panel (frosted
+  glass before macOS 26), works with the mouse, keyboard or controller:
   - Graphics: full screen, borderless or windowed; render resolution (the game's own
     resolution by default, 1.5x for smoother edges, or the full screen); frame limit (original,
     40, 60, or an experimental 120 FPS); world texture filtering up to 16x anisotropic; a
