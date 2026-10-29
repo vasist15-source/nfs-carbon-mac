@@ -83,6 +83,11 @@ __attribute__((weak)) int mods_menu_render(int, int, uint64_t *, const uint8_t *
 __attribute__((weak)) int mods_menu_pointer(float, float, int, int, int) {
     return 0;
 }
+__attribute__((weak)) void mods_menu_set_text_backend(const struct MenuTextBackend *) {}
+__attribute__((weak)) void mods_menu_set_style(int, uint8_t, uint8_t, uint8_t) {}
+__attribute__((weak)) int mods_menu_panel(float *, float *, float *, float *, float *) {
+    return 0;
+}
 
 __attribute__((weak)) int mods_texture_override(uint64_t, int32_t, int32_t, int32_t, uint8_t **,
                                                 uint32_t *) {

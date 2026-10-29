@@ -425,6 +425,18 @@ Explain findings plainly and keep commands copy-pasteable.
    scale -> colour key -> encode (simple bounding-box DXT encoder). Source is the
    surface's CPU copy. Callers: 007d7580 (texture copy when formats differ),
    00759040 (per mip), 00732ca0 (boot).
+20. F10 menu on native glass (git, 2026-10-27; CONFIRMED working by the user 2026-10-29): host/sdl/
+   menu_glass_mac.mm (macOS desktop app only; RECOMP_MENU_GLASS=0 turns it off): a pass-through container
+   (hitTest nil, so SDL still gets every event and input_gate maps the pointer by page fractions as before)
+   over the SDL Metal view holds a dim, NSGlassEffectView (macOS 26+, style regular, tint black 0.34; older:
+   NSVisualEffectView HUD material) at the panel, and the page RGBA (premultiplied CGImage) on top. The
+   presenter (attach_menu_page) publishes pixels instead of uploading a texture and sets
+   CompositorInput::settings_page_native, so the compositor only places the page (compositor_settings_page_
+   drawn). Views are updated by host_menu_glass_tick from pump()/idle_wait() (main thread). The drawer
+   (mods/settings_menu_draw.cpp) has a glass look (mods_menu_set_style: no dim/panel fill, capsule tabs and
+   buttons, rounded selection, switches for "On"/"Off" rows, system accent, mods_menu_panel exports the panel
+   rect) and a text backend hook (mods_menu_set_text_backend; the .mm draws SF with Core Text, semibold via
+   kCTFontWeightTrait 0.3). Weak defaults in page_overlay.cpp / mods_seam.cpp keep other hosts unchanged.
 18. Brightness (git, 2026-10-10; CONFIRMED working by the user 2026-10-24): Dev_SetGammaRamp/GetGammaRamp store the
    D3DGAMMARAMP and call host_set_gamma_ramp (dx/host_api.h, weak no-op default); host/compositor.cpp
    keeps 17 samples per channel and the Metal compositor_fragment applies them (Quad.pad = 1, Quad

@@ -28,6 +28,7 @@
 #include "../../runtime/display_seam.h"
 #include "../d3d_render.h"
 #include "../game_path.h"
+#include "../menu_glass.h"
 #include "../launcher/launcher_sdl.h"
 #include "../gpu/gpu_factory.h"
 #include "../input.h"
@@ -1708,6 +1709,7 @@ void pump() {
     after_events();
     update_idle_cursor();
     host_gate_pointer_tick();
+    host_menu_glass_tick(g_window);
 }
 
 // The runtime's idle wait, called on the run thread when the guest is about to
@@ -1733,6 +1735,7 @@ int idle_wait(double seconds) {
     int changed = service(seconds);
     after_events();
     update_idle_cursor();
+    host_menu_glass_tick(g_window);
     return changed;
 }
 

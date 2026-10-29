@@ -402,6 +402,8 @@ void compositor_compose(gpu::Device *device, const CompositorInput *in, gpu::Tex
              in->hdr_linear ? 2 : in->hdr_scene ? 1 : 0);
         if (in->settings_page)
             draw(pass, *in, in->settings_page, drawn_settings_page_rect(*in), full_uv, Straight, 0, false);
+        else if (in->settings_page_native)
+            drawn_settings_page_rect(*in);
         finish();
         return;
     }
@@ -451,6 +453,8 @@ void compositor_compose(gpu::Device *device, const CompositorInput *in, gpu::Tex
     }
     if (in->settings_page)
         draw(pass, *in, in->settings_page, drawn_settings_page_rect(*in), full_uv, Straight, 0, false);
+    else if (in->settings_page_native)
+        drawn_settings_page_rect(*in);
     finish();
 }
 

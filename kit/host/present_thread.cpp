@@ -1,4 +1,5 @@
 #include "page_overlay.h"
+#include "menu_glass.h"
 #include "../runtime/display_seam.h"
 // Worker-owned swapchain and sealed-frame mailbox, over gpu.h. No window code here.
 #include "present.h"
@@ -319,6 +320,9 @@ struct Service : std::enable_shared_from_this<Service> {
     // The tabbed settings menu's last page and the generation it shows (mutex held).
     std::shared_ptr<Composite> menu_page;
     uint64_t menu_generation = 0;
+    // The same for a menu shown in the host's glass views (menu_glass.h), which keep the pixels.
+    int glass_w = 0, glass_h = 0;
+    uint64_t glass_generation = 0;
     ~Service() {
         if (timings)
             fclose(timings);
@@ -1641,13 +1645,39 @@ bool attach_menu_page(const std::shared_ptr<Service> &s) {
         w = std::max(1, int(w * k)), h = std::max(1, int(h * k));
     }
     uint64_t generation = 0;
+    const bool glass = host_menu_glass_active();
     {
         std::lock_guard lock(s->mutex);
-        if (s->menu_page && s->menu_page->w == w && s->menu_page->h == h)
+        if (glass) {
+            if (s->glass_w == w && s->glass_h == h)
+                generation = s->glass_generation;
+        } else if (s->menu_page && s->menu_page->w == w && s->menu_page->h == h) {
             generation = s->menu_generation;
+        }
     }
     const uint8_t *pixels = nullptr;
     const int drawn = host_page_menu(w, h, &generation, &pixels);
+    if (glass) {
+        // The views show the page; the frame carries only where it goes, for the pointer.
+        if (drawn == 0)
+            host_menu_glass_hide();
+        else if (drawn == 2 && pixels)
+            host_menu_glass_publish(w, h, pixels);
+        std::lock_guard lock(s->mutex);
+        s->menu_page.reset();
+        if (drawn == 0) {
+            s->glass_w = s->glass_h = 0;
+            return false;
+        }
+        s->glass_w = w, s->glass_h = h, s->glass_generation = generation;
+        if (!s->writing)
+            return true;
+        ++s->settings_pages;
+        s->writing->input.settings_page_native = true;
+        s->writing->input.settings_page_w = w;
+        s->writing->input.settings_page_h = h;
+        return true;
+    }
     std::lock_guard lock(s->mutex);
     if (drawn == 0) {
         s->menu_page.reset();

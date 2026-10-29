@@ -3,14 +3,22 @@
 // own Open Sans. It is only redrawn when the menu's content or the size changed; the presenter
 // keeps the last texture otherwise. Called on the thread that seals a frame, so it uses its own
 // glyph cache (gdi's is the guest's) under its own lock.
+//
+// A host can give it a look of its own (mods_menu_set_style): the macOS host puts a native glass
+// panel behind the page, so the page leaves the panel clear and draws only what is on it, with
+// rounded shapes, switches for on/off rows and the system's accent colour, and draws its text in
+// the system font (mods_menu_set_text_backend).
 #include "settings_menu.h"
 #include "mods_internal.h"
 #include "../runtime/gdi32_truetype.h"
+#include "../runtime/mods_seam.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <map>
+#include <utility>
 #include <mutex>
 #include <tuple>
 #include <vector>
@@ -28,6 +36,13 @@ const Rgba kSoft = {168, 174, 184, 255};
 const Rgba kFaint = {112, 116, 124, 255};
 const Rgba kAccent = {255, 168, 24, 255};
 const Rgba kSelect = {255, 255, 255, 26};
+
+// The host's look and text, set by mods_menu_set_style / mods_menu_set_text_backend; under g_mu.
+bool g_glass = false;
+Rgba g_glass_accent = {10, 132, 255, 255};
+const MenuTextBackend *g_text = nullptr;
+float g_panel[5] = {0, 0, 0, 0, 0}; // x0 y0 x1 y1 as fractions of the page, radius / page height
+bool g_panel_valid = false;
 
 struct Canvas {
     int w, h;
@@ -77,6 +92,7 @@ std::vector<uint32_t> decode(const std::string &s) {
 
 struct Font {
     const gdi::TrueTypeFace *face = nullptr;
+    void *native = nullptr; // the host's font (g_text), which then draws and measures the text
     double scale = 0;
     int ascent = 0, height = 0;
 };
@@ -96,8 +112,37 @@ const gdi::TrueTypeGlyph &glyph(const Font &f, uint32_t cp) {
     return g_glyphs.emplace(key, std::move(g)).first->second;
 }
 
+// A whole string drawn by the host's text backend, cached like the glyphs.
+struct NativeRun {
+    int w = 0, h = 0, x = 0, y = 0, advance = 0;
+    std::vector<uint8_t> coverage;
+};
+std::map<std::pair<void *, std::string>, NativeRun> g_runs;
+
+const NativeRun &native_run(const Font &f, const std::string &s) {
+    auto key = std::make_pair(f.native, s);
+    auto it = g_runs.find(key);
+    if (it != g_runs.end())
+        return it->second;
+    if (g_runs.size() > 1024)
+        g_runs.clear();
+    NativeRun r;
+    r.advance = g_text->measure(f.native, s.c_str());
+    uint8_t *cov = nullptr;
+    if (g_text->render(f.native, s.c_str(), &cov, &r.w, &r.h, &r.x, &r.y) && cov && r.w > 0 && r.h > 0)
+        r.coverage.assign(cov, cov + size_t(r.w) * size_t(r.h));
+    else
+        r.w = r.h = 0;
+    std::free(cov);
+    return g_runs.emplace(key, std::move(r)).first->second;
+}
+
 Font font(int px, bool bold) {
     Font f;
+    if (g_text && (f.native = g_text->font(std::max(px, 6), bold ? 600 : 400))) {
+        g_text->metrics(f.native, &f.ascent, &f.height);
+        return f;
+    }
     f.face = gdi::truetype_windows_substitute("Segoe UI", bold ? 600 : 400);
     if (!f.face)
         return f;
@@ -120,11 +165,24 @@ int measure(const Font &f, const std::vector<uint32_t> &cps) {
     return x;
 }
 int measure(const Font &f, const std::string &s) {
+    if (f.native)
+        return native_run(f, s).advance;
     return measure(f, decode(s));
 }
 
 // Text with its top at y. Returns the advance. Clipped at max_x when given.
 int text(Canvas &c, const Font &f, int x, int y, const std::string &s, Rgba ink, int max_x = 1 << 30) {
+    if (f.native) {
+        const NativeRun &r = native_run(f, s);
+        const int base = y + f.ascent;
+        for (int gy = 0; gy < r.h; ++gy)
+            for (int gx = 0; gx < r.w; ++gx) {
+                const int px = x + r.x + gx;
+                if (px < max_x)
+                    c.blend(px, base + r.y + gy, ink, r.coverage[size_t(gy) * r.w + gx]);
+            }
+        return r.advance;
+    }
     if (!f.face)
         return 0;
     const std::vector<uint32_t> cps = decode(s);
@@ -217,6 +275,47 @@ void outline(Canvas &c, int x0, int y0, int x1, int y1, int t, Rgba ink) {
     c.fill(x0, y0, x0 + t, y1, ink);
     c.fill(x1 - t, y0, x1, y1, ink);
 }
+// A rounded rectangle with smooth edges (r up to half the shorter side: a capsule), filled, or
+// only its edge `stroke` pixels wide.
+void round_rect(Canvas &c, int x0, int y0, int x1, int y1, double r, Rgba ink, double stroke = 0) {
+    r = std::max(0.0, std::min({r, (x1 - x0) / 2.0, (y1 - y0) / 2.0}));
+    for (int y = std::max(y0, 0); y < std::min(y1, c.h); ++y)
+        for (int x = std::max(x0, 0); x < std::min(x1, c.w); ++x) {
+            const double px = x + 0.5, py = y + 0.5;
+            const double dx = std::max({x0 + r - px, px - (x1 - r), 0.0});
+            const double dy = std::max({y0 + r - py, py - (y1 - r), 0.0});
+            // The distance to the edge, negative inside.
+            const double d = dx > 0 || dy > 0 ? std::sqrt(dx * dx + dy * dy) - r
+                                              : -std::min({px - x0, x1 - px, py - y0, y1 - py});
+            double cov = std::clamp(0.5 - d, 0.0, 1.0);
+            if (stroke > 0)
+                cov = std::min(cov, std::clamp(0.5 + d + stroke, 0.0, 1.0));
+            if (cov > 0)
+                c.blend(x, y, ink, int(cov * 255 + 0.5));
+        }
+}
+// An on/off switch, macOS style, its left edge at x and centred on cy.
+void toggle(Canvas &c, int x, int cy, int w, int h, bool on, Rgba accent) {
+    round_rect(c, x, cy - h / 2, x + w, cy + h - h / 2, h / 2.0, on ? accent : Rgba{255, 255, 255, 52});
+    const int inset = std::max(2, h / 12), d = h - 2 * inset;
+    const int kx = on ? x + w - inset - d : x + inset, ky = cy - h / 2 + inset;
+    round_rect(c, kx, ky + 1, kx + d, ky + d + 1, d / 2.0, Rgba{0, 0, 0, 60}); // its shadow
+    round_rect(c, kx, ky, kx + d, ky + d, d / 2.0, Rgba{255, 255, 255, 255});
+}
+} // namespace
+
+namespace {
+// The colours of one look. The glass look's are white at various strengths, so the glass shows
+// through, with the host's accent.
+struct Palette {
+    Rgba ink, soft, faint, edge, select, accent, row;
+};
+Palette palette() {
+    if (!g_glass)
+        return {kInk, kSoft, kFaint, kEdge, kSelect, kAccent, {214, 216, 222, 255}};
+    return {{255, 255, 255, 255}, {255, 255, 255, 190}, {255, 255, 255, 150}, {255, 255, 255, 46},
+            {255, 255, 255, 40},  g_glass_accent,        {255, 255, 255, 235}};
+}
 } // namespace
 
 int mods_menu_render(int w, int h, uint64_t *generation, const uint8_t **pixels) {
@@ -227,13 +326,16 @@ int mods_menu_render(int w, int h, uint64_t *generation, const uint8_t **pixels)
         return 0;
     std::lock_guard lock(g_mu);
     const uint64_t key = (m.generation ^ (uint64_t(uint32_t(w)) << 40) ^ (uint64_t(uint32_t(h)) << 20)) +
-                         g_view_serial * 0x9e3779b97f4a7c15ull;
+                         g_view_serial * 0x9e3779b97f4a7c15ull + (g_glass ? 0x5bd1e995ull : 0);
     if (*generation == key)
         return 1; // unchanged: the caller keeps what it has
+    const Palette P = palette();
+    const bool glass = g_glass;
     std::vector<uint8_t> *rgba = &g_page;
     rgba->assign(size_t(w) * size_t(h) * 4, 0);
     Canvas c{w, h, rgba};
-    c.fill(0, 0, w, h, kDim);
+    if (!glass)
+        c.fill(0, 0, w, h, kDim);
     std::vector<Hit> hits;
     auto hit = [&](int x0, int y0, int x1, int y1, HitKind kind, size_t index) {
         hits.push_back({float(x0) / w, float(y0) / h, float(x1) / w, float(y1) / h, kind, index});
@@ -246,25 +348,52 @@ int mods_menu_render(int w, int h, uint64_t *generation, const uint8_t **pixels)
     auto u = [s](double v) { return int(std::lround(v * s)); };
     const int pw = std::min(w - u(40), u(1240)), ph = std::min(h - u(40), u(940));
     const int px = (w - pw) / 2, py = (h - ph) / 2;
-    c.fill(px - u(2), py - u(2), px + pw + u(2), py + ph + u(2), kEdge);
-    c.fill(px, py, px + pw, py + ph, kPanel);
+    if (glass) {
+        // The host's glass goes here; the page leaves it clear.
+        const int radius = u(44);
+        g_panel[0] = float(px) / w, g_panel[1] = float(py) / h;
+        g_panel[2] = float(px + pw) / w, g_panel[3] = float(py + ph) / h;
+        g_panel[4] = float(radius) / h;
+        g_panel_valid = true;
+    } else {
+        c.fill(px - u(2), py - u(2), px + pw + u(2), py + ph + u(2), kEdge);
+        c.fill(px, py, px + pw, py + ph, kPanel);
+    }
     const int left = px + u(56), right = px + pw - u(56);
 
-    // Tabs: page names that look and act like buttons.
-    const Font tab_font = font(u(34), true);
+    // Tabs: page names that look and act like buttons; on glass, a segmented control.
+    const Font tab_font = font(u(glass ? 28 : 34), true);
     int tx = left;
     const int tab_y = py + u(34);
+    const int seg_pad = u(26), seg_gap = glass ? u(4) : u(48);
+    if (glass) {
+        int track = 0;
+        for (size_t i = 0; i < m.tabs.size(); ++i)
+            track += measure(tab_font, m.tabs[i]) + 2 * seg_pad + (i ? seg_gap : 0);
+        round_rect(c, left - u(6), tab_y - u(6), left + track + u(6), tab_y + tab_font.height + u(18), 1e9,
+                   Rgba{255, 255, 255, 26});
+        tx = left;
+    }
     for (size_t i = 0; i < m.tabs.size(); ++i) {
         const bool on = int(i) == m.tab;
         const bool hover = !on && hover_tab_kind && g_hover_index == i;
         const int adv = measure(tab_font, m.tabs[i]);
+        if (glass) {
+            const int bx0 = tx, by0 = tab_y, bx1 = tx + adv + 2 * seg_pad, by1 = tab_y + tab_font.height + u(12);
+            if (on || hover)
+                round_rect(c, bx0, by0, bx1, by1, 1e9, on ? Rgba{255, 255, 255, 64} : Rgba{255, 255, 255, 26});
+            text(c, tab_font, bx0 + seg_pad, tab_y + u(6), m.tabs[i], on ? P.ink : hover ? P.ink : P.soft);
+            hit(bx0, by0, bx1, by1, HIT_TAB, i);
+            tx = bx1 + seg_gap;
+            continue;
+        }
         const int bx0 = tx - u(16), by0 = tab_y - u(6), bx1 = tx + adv + u(16),
                   by1 = tab_y + tab_font.height + u(14);
         if (hover)
-            c.fill(bx0, by0, bx1, by1, kSelect);
-        text(c, tab_font, tx, tab_y, m.tabs[i], on ? kInk : hover ? kSoft : kFaint);
+            c.fill(bx0, by0, bx1, by1, P.select);
+        text(c, tab_font, tx, tab_y, m.tabs[i], on ? P.ink : hover ? P.soft : P.faint);
         if (on)
-            c.fill(tx, tab_y + tab_font.height + u(8), tx + adv, tab_y + tab_font.height + u(12), kAccent);
+            c.fill(tx, tab_y + tab_font.height + u(8), tx + adv, tab_y + tab_font.height + u(12), P.accent);
         hit(bx0, by0, bx1, by1, HIT_TAB, i);
         tx += adv + u(48);
     }
@@ -274,16 +403,21 @@ int mods_menu_render(int w, int h, uint64_t *generation, const uint8_t **pixels)
     const int cw = measure(close_font, close);
     const int cx1 = right, cx0 = right - cw - u(36);
     const int cy0 = tab_y + u(2), cy1 = cy0 + close_font.height + u(16);
-    if (hover_close)
-        c.fill(cx0, cy0, cx1, cy1, kSelect);
-    outline(c, cx0, cy0, cx1, cy1, std::max(1, u(2)), hover_close ? kSoft : kEdge);
-    text(c, close_font, cx0 + u(18), cy0 + u(8), close, hover_close ? kInk : kSoft);
+    if (glass) {
+        round_rect(c, cx0, cy0, cx1, cy1, 1e9, hover_close ? Rgba{255, 255, 255, 72} : Rgba{255, 255, 255, 34});
+        text(c, close_font, cx0 + u(18), cy0 + u(8), close, P.ink);
+    } else {
+        if (hover_close)
+            c.fill(cx0, cy0, cx1, cy1, P.select);
+        outline(c, cx0, cy0, cx1, cy1, std::max(1, u(2)), hover_close ? P.soft : P.edge);
+        text(c, close_font, cx0 + u(18), cy0 + u(8), close, hover_close ? P.ink : P.soft);
+    }
     hit(cx0, cy0, cx1, cy1, HIT_CLOSE, 0);
-    const std::string pages = "Tab, or click a page name";
-    const int pages_x = std::max(tx, cx0 - u(24) - measure(hint_font, pages));
-    text(c, hint_font, pages_x, cy0 + (cy1 - cy0 - hint_font.height) / 2, pages, kFaint, cx0 - u(12));
-    const int rule_y = tab_y + tab_font.height + u(24);
-    c.fill(left, rule_y, right, rule_y + std::max(1, u(1)), kEdge);
+    const std::string pages = glass ? "Tab or click to change page" : "Tab, or click a page name";
+    const int pages_x = std::max(tx + u(12), cx0 - u(24) - measure(hint_font, pages));
+    text(c, hint_font, pages_x, cy0 + (cy1 - cy0 - hint_font.height) / 2, pages, P.faint, cx0 - u(12));
+    const int rule_y = tab_y + tab_font.height + u(glass ? 36 : 24);
+    c.fill(left, rule_y, right, rule_y + std::max(1, u(1)), P.edge);
 
     // The footer: timing, help, status and prompts, from the bottom up.
     const Font help_font = font(u(22), false), small_font = font(u(20), false);
@@ -299,7 +433,7 @@ int mods_menu_render(int w, int h, uint64_t *generation, const uint8_t **pixels)
     int fy = bottom;
     for (size_t i = prompts.size(); i-- > 0;) {
         fy -= small_font.height;
-        text(c, small_font, left, fy, prompts[i], kFaint, right);
+        text(c, small_font, left, fy, prompts[i], P.faint, right);
         fy -= u(4);
     }
     fy -= u(10);
@@ -319,14 +453,26 @@ int mods_menu_render(int w, int h, uint64_t *generation, const uint8_t **pixels)
             const bool hover = hover_action_kind && g_hover_index == i;
             const int bw = measure(button_font, m.lines[i].label) + u(36);
             bx -= bw;
-            if (hover)
-                c.fill(bx, fy, bx + bw, fy + bh, kSelect);
-            outline(c, bx, fy, bx + bw, fy + bh, std::max(1, u(2)), hover ? kInk : kAccent);
-            text(c, button_font, bx + u(18), fy + u(7), m.lines[i].label, hover ? kInk : kAccent);
+            if (glass) {
+                // Apply is the default button: filled with the accent.
+                const bool primary = m.lines[i].label == "Apply";
+                Rgba fill = primary ? P.accent : Rgba{255, 255, 255, 40};
+                if (hover)
+                    fill.a = uint8_t(std::min(255, fill.a + (primary ? 0 : 36)));
+                round_rect(c, bx, fy, bx + bw, fy + bh, 1e9, fill);
+                if (hover && primary)
+                    round_rect(c, bx, fy, bx + bw, fy + bh, 1e9, Rgba{255, 255, 255, 40});
+                text(c, button_font, bx + u(18), fy + u(7), m.lines[i].label, P.ink);
+            } else {
+                if (hover)
+                    c.fill(bx, fy, bx + bw, fy + bh, P.select);
+                outline(c, bx, fy, bx + bw, fy + bh, std::max(1, u(2)), hover ? P.ink : P.accent);
+                text(c, button_font, bx + u(18), fy + u(7), m.lines[i].label, hover ? P.ink : P.accent);
+            }
             hit(bx, fy, bx + bw, fy + bh, HIT_ACTION, i);
             bx -= u(14);
         }
-        text(c, small_font, left, fy + (bh - small_font.height) / 2, m.status, kAccent, bx - u(10));
+        text(c, small_font, left, fy + (bh - small_font.height) / 2, m.status, P.accent, bx - u(10));
         fy -= u(8);
     }
     std::string timing;
@@ -339,14 +485,14 @@ int mods_menu_render(int w, int h, uint64_t *generation, const uint8_t **pixels)
     const int footer_top = fy - std::max(help_h, u(110)) - u(16);
     int hy = footer_top + u(16);
     if (!timing.empty()) {
-        text(c, small_font, left, hy, timing, kAccent, right);
+        text(c, small_font, left, hy, timing, P.accent, right);
         hy += small_font.height + u(8);
     }
     for (int i = 0; i < help_lines; ++i) {
-        text(c, help_font, left, hy, help[size_t(i)], kSoft, right);
+        text(c, help_font, left, hy, help[size_t(i)], P.soft, right);
         hy += help_font.height + u(4);
     }
-    c.fill(left, footer_top, right, footer_top + std::max(1, u(1)), kEdge);
+    c.fill(left, footer_top, right, footer_top + std::max(1, u(1)), P.edge);
 
     // The rows. The view keeps its place and moves only to keep the selected line in sight.
     const Font row_font = font(u(26), false), head_font = font(u(21), true), value_font = font(u(26), true);
@@ -382,6 +528,7 @@ int mods_menu_render(int w, int h, uint64_t *generation, const uint8_t **pixels)
     const size_t first = g_first;
     int y = list_top;
     const int chevron_w = measure(value_font, "<") + u(14), gt_w = measure(value_font, ">");
+    const int switch_w = u(58), switch_h = u(32);
     size_t last_drawn = first;
     for (size_t i = first; i < n; ++i) {
         const MenuLine &l = m.lines[i];
@@ -391,22 +538,43 @@ int mods_menu_render(int w, int h, uint64_t *generation, const uint8_t **pixels)
         last_drawn = i;
         if (l.kind == MenuLine::HEADER) {
             std::string upper = l.label;
-            for (char &ch : upper)
-                if (ch >= 'a' && ch <= 'z')
-                    ch = char(ch - 32);
-            text(c, head_font, left, y + lh - head_font.height - u(8), upper, kSoft, right);
+            if (!glass) // the glass look keeps a section's own capitals, as macOS does
+                for (char &ch : upper)
+                    if (ch >= 'a' && ch <= 'z')
+                        ch = char(ch - 32);
+            text(c, head_font, left, y + lh - head_font.height - u(8), upper, P.soft, right);
             y += lh;
             continue;
         }
         if (l.selected) {
-            c.fill(left - u(20), y, right + u(20), y + lh, kSelect);
-            c.fill(left - u(20), y, left - u(14), y + lh, kAccent);
+            if (glass) {
+                round_rect(c, left - u(20), y + u(2), right + u(20), y + lh - u(2), u(14), P.select);
+            } else {
+                c.fill(left - u(20), y, right + u(20), y + lh, P.select);
+                c.fill(left - u(20), y, left - u(14), y + lh, P.accent);
+            }
         }
-        const Rgba ink = !l.enabled ? kFaint : l.selected ? kInk : Rgba{214, 216, 222, 255};
+        const Rgba ink = !l.enabled ? P.faint : l.selected ? P.ink : P.row;
         const int ty = y + (lh - row_font.height) / 2;
         if (l.kind == MenuLine::ACTION) {
-            text(c, value_font, left, ty, l.label, ink, right);
+            text(c, value_font, left, ty, l.label, glass && l.enabled ? P.accent : ink, right);
             hit(left - u(20), y, right + u(20), y + lh, HIT_ROW, i);
+            y += lh;
+            continue;
+        }
+        // On glass, an on/off row is a switch; choosing the row (or clicking it) flips it.
+        const bool is_switch = glass && l.adjustable && (l.value == "On" || l.value == "Off");
+        if (is_switch) {
+            hit(left - u(20), y, right + u(20), y + lh, HIT_ROW, i);
+            const int sx = right - switch_w;
+            toggle(c, sx, y + lh / 2, switch_w, switch_h, l.value == "On", l.enabled ? P.accent : P.faint);
+            int lx_end = sx - u(40);
+            if (l.pending) {
+                const int d = u(10), dcx = sx - u(20), dcy = y + lh / 2;
+                round_rect(c, dcx - d / 2, dcy - d / 2, dcx + d / 2, dcy + d / 2, d, P.accent);
+                lx_end = dcx - u(20);
+            }
+            text(c, row_font, left, ty, l.label, ink, lx_end);
             y += lh;
             continue;
         }
@@ -421,33 +589,56 @@ int mods_menu_render(int w, int h, uint64_t *generation, const uint8_t **pixels)
         int vx = right;
         if (l.selected && l.adjustable) {
             vx -= gt_w;
-            text(c, value_font, vx, ty, ">", kAccent);
+            text(c, value_font, vx, ty, ">", P.accent);
             vx -= u(14);
         }
         vx -= vw;
-        text(c, value_font, vx, ty, l.value, l.pending ? kAccent : ink);
+        text(c, value_font, vx, ty, l.value, l.pending ? P.accent : glass && !l.selected ? P.soft : ink);
         if (l.selected && l.adjustable)
-            text(c, value_font, vx - chevron_w, ty, "<", kAccent);
+            text(c, value_font, vx - chevron_w, ty, "<", P.accent);
         if (l.pending) {
             const int d = u(10), cx = vx - (l.selected && l.adjustable ? chevron_w : 0) - u(20), cy = y + lh / 2;
             for (int yy = -d / 2; yy <= d / 2; ++yy)
                 for (int xx = -d / 2; xx <= d / 2; ++xx)
                     if (xx * xx + yy * yy <= d * d / 4)
-                        c.blend(cx + xx, cy + yy, kAccent, 255);
+                        c.blend(cx + xx, cy + yy, P.accent, 255);
         }
         text(c, row_font, left, ty, l.label, ink, vx - chevron_w - u(40));
         y += lh;
     }
     // More above or below: small arrows at the list's right edge.
     if (first > 0)
-        triangle(c, right + u(36), list_top + u(10), u(9), -1, kSoft);
+        triangle(c, right + u(36), list_top + u(10), u(9), -1, P.soft);
     if (n && last_drawn + 1 < n)
-        triangle(c, right + u(36), list_bottom - u(10), u(9), +1, kSoft);
+        triangle(c, right + u(36), list_bottom - u(10), u(9), +1, P.soft);
     g_hits = std::move(hits);
     g_hits_tab = m.tab;
     *generation = key;
     *pixels = g_page.data();
     return 2;
+}
+
+void mods_menu_set_text_backend(const MenuTextBackend *backend) {
+    std::lock_guard lock(g_mu);
+    g_text = backend && backend->font && backend->metrics && backend->measure && backend->render ? backend : nullptr;
+    g_runs.clear();
+    ++g_view_serial; // redraw with it
+}
+
+void mods_menu_set_style(int glass, uint8_t r, uint8_t g, uint8_t b) {
+    std::lock_guard lock(g_mu);
+    g_glass = glass != 0;
+    g_glass_accent = {r, g, b, 255};
+    g_panel_valid = false;
+    ++g_view_serial;
+}
+
+int mods_menu_panel(float *x0, float *y0, float *x1, float *y1, float *radius) {
+    std::lock_guard lock(g_mu);
+    if (!g_panel_valid || !g_glass)
+        return 0;
+    *x0 = g_panel[0], *y0 = g_panel[1], *x1 = g_panel[2], *y1 = g_panel[3], *radius = g_panel[4];
+    return 1;
 }
 
 // The pointer over the page, as fractions of the page (u, v in 0..1). button: -1 for motion,

@@ -253,6 +253,10 @@ void mods_page_draw(void *pixels, int w, int h, int bpp, int pitch, const uint32
 // See runtime/mods_seam.h. Defined in settings_menu_draw.cpp.
 int mods_menu_render(int w, int h, uint64_t *generation, const uint8_t **pixels);
 int mods_menu_pointer(float u, float v, int button, int down, int wheel);
+struct MenuTextBackend;
+void mods_menu_set_text_backend(const struct MenuTextBackend *backend);
+void mods_menu_set_style(int glass, uint8_t r, uint8_t g, uint8_t b);
+int mods_menu_panel(float *x0, float *y0, float *x1, float *y1, float *radius);
 // The page is host state rather than a registration, so a rollback does not
 // restore it. The loader saves it around each mod's init and restores it when
 // that init fails, so a mod that opened its page and then failed does not

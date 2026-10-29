@@ -1,4 +1,5 @@
 #include "page_overlay.h"
+#include "menu_glass.h"
 #include "../runtime/mods_seam.h"
 
 #include <vector>
@@ -77,3 +78,11 @@ int host_page_menu(int w, int h, uint64_t *generation, const uint8_t **pixels) {
         return 0;
     return mods_menu_render(w, h, generation, pixels);
 }
+
+// The macOS host defines these (sdl/menu_glass_mac.mm); every other host keeps the compositor's page.
+__attribute__((weak)) bool host_menu_glass_active(void) {
+    return false;
+}
+__attribute__((weak)) void host_menu_glass_publish(int, int, const uint8_t *) {}
+__attribute__((weak)) void host_menu_glass_hide(void) {}
+__attribute__((weak)) void host_menu_glass_tick(void *) {}

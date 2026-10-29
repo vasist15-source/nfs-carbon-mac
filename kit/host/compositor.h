@@ -59,6 +59,9 @@ struct CompositorInput {
     // Its size: 640x480 for the classic page (shown at the UI scale); anything else is the tabbed
     // menu, drawn at the game rectangle's size and fitted to the drawable.
     int settings_page_w = 640, settings_page_h = 480;
+    // The tabbed menu is on screen in the host's own views (menu_glass.h): no texture to draw, but
+    // the page is still placed, so the pointer finds it.
+    bool settings_page_native = false;
     bool classic = false; // guest-resolution layered scene, aspect-preserving whole-frame mapping
     // Wide view off: the scene was projected at the guest's aspect, so on a
     // wider drawable it is boxed at that aspect with its HUD and input.

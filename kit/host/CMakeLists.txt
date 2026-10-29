@@ -213,6 +213,12 @@ elseif(ANDROID)
 else()
   set(POP_PLATFORM_UI ${HOST}/sdl/platform_ui_desktop.cpp ${HOST}/launcher/launcher_platform_desktop.cpp)
 endif()
+# The settings menu on a native glass panel (menu_glass.h): the macOS desktop app only.
+if(APPLE AND NOT IOS)
+  list(APPEND POP_PLATFORM_UI ${HOST}/sdl/menu_glass_mac.mm)
+  set_source_files_properties(${HOST}/sdl/menu_glass_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  list(APPEND FW_METAL "-framework AppKit")
+endif()
 
 if(TARGET recomp_gen)
   if(NOT IOS AND NOT ANDROID)

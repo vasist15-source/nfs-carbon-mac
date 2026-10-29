@@ -97,6 +97,24 @@ int mods_menu_render(int w, int h, uint64_t *generation, const uint8_t **pixels)
 // is motion, else 0/1/2 with down; wheel is in WM_MOUSEWHEEL units. 1 = consumed (the menu is
 // open), 0 = the menu is not open.
 int mods_menu_pointer(float u, float v, int button, int down, int wheel);
+// A host's own text drawing for that menu (the macOS host: the system font through Core Text);
+// without one, or for a size it has no font for, the menu keeps the kit's Open Sans. Called on
+// the thread that draws the menu. render gives the whole string's coverage (malloc'd, w*h bytes,
+// the caller frees it) with its top-left at (x, y) from the pen on the baseline.
+struct MenuTextBackend {
+    void *(*font)(int px, int weight);
+    void (*metrics)(void *font, int *ascent, int *height);
+    int (*measure)(void *font, const char *utf8);
+    bool (*render)(void *font, const char *utf8, uint8_t **coverage, int *w, int *h, int *x, int *y);
+};
+void mods_menu_set_text_backend(const struct MenuTextBackend *backend);
+// The menu's look. glass 0: the kit's own (the screen dimmed, a dark panel). glass 1: the host
+// puts a glass panel behind the page, so the page leaves the panel clear and draws only what is on
+// it, with (r, g, b) as the accent.
+void mods_menu_set_style(int glass, uint8_t r, uint8_t g, uint8_t b);
+// The last drawn page's panel as fractions of the page, and its corner radius as a fraction of the
+// page's height. 0 before a page was drawn.
+int mods_menu_panel(float *x0, float *y0, float *x1, float *y1, float *radius);
 
 // Texture override, consulted by the DirectX shim at upload.
 int mods_texture_override(uint64_t hash64, int32_t w, int32_t h, int32_t format,
