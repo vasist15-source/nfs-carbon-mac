@@ -58,6 +58,10 @@ Third-party work this port reimplements:
   included in this repository: the setup optionally downloads them from
   XtendedInput's GitHub release onto the player's Mac.
 
+- NFSC Extra Options by the ExOpts Team (github.com/ExOptsTeam/NFSCExOpts, GPL-3). Its
+  source (v3.0.1) was read for the game addresses and behaviour of the options in
+  mods/core/nfsc/extras.h and game.toml; none of its code is used.
+
 - NFS Carbon Remastered UI by BadassBaboon (nfsmods.xyz/mod/1095) is not included: the Setup
   app downloads it on the player's Mac only when its checkbox is ticked. It is installed by
   tools/setup_kit/hd_ui.py, which runs the mod's own Endscript; the Endscript commands and the

@@ -82,7 +82,7 @@ POP_MOD_DECLARE_ABI();
 #define HUD_RIGHT_GROUP 0x5D0101F1u
 
 static const PopModApi *g_api;
-static uint32_t g_hooks[26];
+static uint32_t g_hooks[27];
 static int g_widescreen = 1;
 static int g_scaling = 1;
 static uint32_t g_w = 1280, g_h = 720;
@@ -126,6 +126,7 @@ static void log_line(const char *text) {
 #include "rumble.h" /* controller rumble from the game's force-feedback values */
 #include "cheats.h" /* infinite nitrous and speedbreaker */
 #include "camera.h" /* look around with the right stick */
+#include "extras.h" /* options from the NFSC Extra Options mod */
 
 /* ---- the resolution list --------------------------------------------------
  * The host scales the frame smoothly to the window, aspect kept (game.toml
@@ -515,6 +516,7 @@ PopModStatus pop_mod_init(const PopModApi *api) {
     rumble_install();
     cheats_install();
     camera_install();
+    extras_install();
     PopModStatus s = install(SETUP_PROJECTION, setup_projection, POP_HOOK_BEFORE, 0);
     if (s != POP_OK)
         return s;

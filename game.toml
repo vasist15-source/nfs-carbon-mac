@@ -156,6 +156,28 @@ instruction_patches = [
     { at = 0x00722e92, text = "FLD dword ptr [0x00c2b42c]" },
     { at = 0x00722e96, text = "FMUL dword ptr [ESP + 0x8]" },
     { at = 0x00722ec2, text = "MOV dword ptr [ESP + 0x50],dword ptr [ESP + 0xc]" },
+    # Extra Options (core.nfsc extras.h; the ExOpts Team's NFSC Extra Options, GPL-3, read for its
+    # addresses): numbers the game keeps in its code are read from slots core.nfsc fills, the game's
+    # own values seeded below for a run without it.
+    { at = 0x004c4cc4, text = "MOV dword ptr [ESI + 0x58],dword ptr [0x00c2b700]" },  # new career cash 5000
+    { at = 0x004c4cd4, text = "MOV dword ptr [ESI + 0x58],dword ptr [0x00c2b704]" },  # ... Collector's Edition 15000
+    { at = 0x004ac7fb, text = "CMP EBX,dword ptr [0x00c2b708]" },                     # Quick Race laps: most 8
+    { at = 0x004ac80e, text = "MOV byte ptr [ESI + 0x4],byte ptr [0x00c2b708]" },     # ... wrapping round to it
+    { at = 0x004ac87c, text = "MOV EDX,dword ptr [0x00c2b710]" },                     # opponents with a crew member: 6
+    { at = 0x004ac88f, text = "MOV EDX,dword ptr [0x00c2b70c]" },                     # opponents: 7
+    { at = 0x004ac8dd, text = "CMP EBX,dword ptr [0x00c2b70c]" },                     # ... Pursuit Tag
+    { at = 0x004ac8e6, text = "MOV byte ptr [ESI + 0x7],byte ptr [0x00c2b70c]" },
+    { at = 0x007a9e3f, text = "PUSH dword ptr [0x00c2b71c]" },                        # traffic density High 50
+    { at = 0x007a9e43, text = "PUSH dword ptr [0x00c2b718]" },                        # ... Medium 10
+    { at = 0x007a9e47, text = "PUSH dword ptr [0x00c2b714]" },                        # ... Low 3
+    { at = 0x0066f800, text = "MOV byte ptr [0x00b74d94],byte ptr [0x00c2b720]" },    # busted-screen face pixelation on
+    { at = 0x0066f87b, text = "MOV byte ptr [0x00b74d94],byte ptr [0x00c2b720]" },
+    { at = 0x006c63a5, text = "PUSH dword ptr [0x00c2b724]" },                        # the player's headlights relit (glare 7)
+    { at = 0x007cbe93, text = "MOV dword ptr [ESP + 0x1c],dword ptr [0x00c2b728]" },  # headlight beams 1.0
+    { at = 0x007cbe9b, text = "MOV dword ptr [ESP + 0x20],dword ptr [0x00c2b728]" },
+    # More saves (Extra Options does these always): no "too many saves" stop at 10, every save listed.
+    { at = 0x005b729e, text = "NOP" },
+    { at = 0x005ac479, text = "JMP 0x005ac492" },
 ]
 # The slots' values without core.nfsc: the original constants (the aspect
 # integers are copied from the game's own at run time by core.nfsc; 3/4 here
@@ -183,6 +205,18 @@ data_seeds = [
     { addr = 0x00c2b50c, value = 1 },
     { addr = 0x00c2b510, value = 1 },
     { addr = 0x00c2b514, value = 1 },
+    # Extra Options slots (core.nfsc extras.h), the game's own values.
+    { addr = 0x00c2b700, value = 5000 },   # new career cash
+    { addr = 0x00c2b704, value = 15000 },  # ... Collector's Edition
+    { addr = 0x00c2b708, value = 8 },      # Quick Race laps
+    { addr = 0x00c2b70c, value = 7 },      # opponents
+    { addr = 0x00c2b710, value = 6 },      # ... with a crew member
+    { addr = 0x00c2b714, value = 3 },      # traffic Low
+    { addr = 0x00c2b718, value = 10 },     # traffic Medium
+    { addr = 0x00c2b71c, value = 50 },     # traffic High
+    { addr = 0x00c2b720, value = 1 },      # busted-screen pixelation
+    { addr = 0x00c2b724, value = 7 },      # headlights glare mask
+    { addr = 0x00c2b728, float = 1.0 },    # headlight beams
 ]
 
 # NFSC.exe imports the Visual C++ 2003 runtime from msvcr71.dll and

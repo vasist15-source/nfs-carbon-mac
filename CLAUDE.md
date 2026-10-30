@@ -148,6 +148,22 @@ Explain findings plainly and keep commands copy-pasteable.
   the v0.5 layout (rows 7/8/24/25 primary exactly old). Setting right_stick_camera (controls, live).
   One-time log lines "right-stick camera running" / "right stick first pushed". Idea from ThirteenAG's
   Camera.ixx (free look, rate-based; not its feel). If left/right feel swapped: flip the sign of `want`.
+- Extra Options (mods/core/nfsc/extras.h, 2026-10-30; CONFIRMED by the user 2026-10-30, all options work): the user's picks from the
+  ExOpts Team's NFSC Extra Options (v3.0.1 source, GPL-3, read for addresses only; ~/tmp clone, NOTICE).
+  All live F10 settings, new Mods-tab groups unlocks/races/driving/world/cheats (kit kModGroups). Data
+  writes: unlock-all 0xa9e6c0, CE 0xa631e8 (1 in the exe; forced each frame while on, first value logged),
+  game speed 0xa712ac, rain 0xb74d20 / fog 0xb74d64 / rain amount 0xa797d0, SB recharge 0xa71270, radar
+  0xa590a4, minimap cops 0xa607d0/d1, neon barriers = letter 'Y' over "BARRIER_SPLINE_*" names in .rdata
+  (0x9d85c8.., read at track load). Slots 0xc2b700.. (game.toml instruction_patches + data_seeds): new
+  career cash 004c4cc4/cd4, Quick Race laps 004ac7fb/80e (fn 004ac7c0), opponents 004ac87c/88f/8dd/8e6
+  (fn 004ac840; canyon left), traffic PUSHes 007a9e3f/43/47, busted pixelation 0066f800/87b ([0xb74d94]),
+  headlights relight PUSH 7 006c63a5 and beams 007cbe93/9b. Always on: no 10-save stop (NOP 005b729e),
+  all saves listed (JMP at 005ac479). Calls from the per-frame input update (pad.h -> extras_tick):
+  Game_SetWorldHeat 0065c550, SetCopsEnabled 006513e0, Force/ClearAIControl 0065c2c0/0065c330, glare
+  on/off/is 006c0ba0/006c0bc0/006d8080 on [0xa9f168] (7 headlights, 0x7000 cop lights); driving = state
+  [0xa99bbc] == 6. Heat bounds: callsite BEFORE hook (slot 26) on clamp 004010e0 (value, lo, hi) from
+  00449a91 (ret 00449a96) in the pursuit update (fn ~00449920, not in the analysis). Not done: harder
+  Quick Race pursuits (its patches are conditional jumps, not switchable), load-any-save.
 - Online menu entries: DONE in mods/core/nfsc/online.h (setting hide_online, default on): the carousel
   builder 0083c420 adds items with 005b2320; the Quick Match / Custom Match adds (return 0083c611 /
   0083c5c3) are skipped. (Old notes: main menu state 00843690, carousel actions 005a5560.)

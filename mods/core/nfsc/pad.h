@@ -214,6 +214,7 @@ static void pad_watch(unsigned port) {
 /* 00692240: the per-frame input update (thiscall). */
 static void pad_keyboard_crew(void);
 static void impact_feedback_tick(const PopModApi *api);
+static void extras_tick(const PopModApi *api);
 static void pad_update_hook(const PopModApi *api, pop_cpu_v1 *cpu, PopHookInvocation *inv, void *user) {
     (void)inv;
     (void)user;
@@ -221,6 +222,7 @@ static void pad_update_hook(const PopModApi *api, pop_cpu_v1 *cpu, PopHookInvoca
     int layout = (int)setting("console_layout", 1);
     pad_keyboard_crew();
     impact_feedback_tick(api); /* rumble.h: one motor update per frame */
+    extras_tick(api);          /* extras.h: Extra Options' settings */
     for (unsigned p = 0; p < pad_ports(); ++p)
         if (g_pad_generic_valid[p])
             pad_watch(p);
