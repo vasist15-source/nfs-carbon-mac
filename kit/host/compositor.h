@@ -83,6 +83,9 @@ void compositor_compose(gpu::Device *device, const CompositorInput *in, gpu::Tex
 int compositor_ui_scale(int drawable_h, int guest_h, int override_);
 // Where the settings page was last drawn, in drawable pixels (pointer hit tests on the page).
 bool compositor_settings_page_drawn(int *x, int *y, int *w, int *h);
+// MetalFX upscaling of the frame's main picture (gpu::Device::spatial_upscale) when it is drawn
+// larger than it was rendered; the presenter sets it from the game's setting. Off by default.
+void compositor_set_upscaling(bool on);
 Anchor compositor_default_anchor(const UiElement *e, int guest_w, int guest_h);
 // Overrides preserve the guest margin to the chosen edge (or centre offset).
 void compositor_set_anchor(uint64_t element_id, Anchor a);

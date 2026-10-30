@@ -199,6 +199,58 @@ struct Pass {
     gpu::Format format;
     std::vector<gpu::Texture> transient; // destroyed when cb completes
 };
+
+// MetalFX upscaling (compositor_set_upscaling): the frame's main picture, when it is drawn more
+// than 10% larger than it was rendered, is enlarged by the backend to exactly the size it is drawn
+// at before the pass begins, and the pass then draws that pixel for pixel. One target is kept and
+// reused (command buffers run in order on one queue); a new size replaces it, the old one freed
+// once the frame that stopped using it completes. HDR frames and other formats keep the filter.
+std::atomic<bool> g_upscaling{false};
+struct UpscaleTarget {
+    gpu::Device *device = nullptr;
+    gpu::Texture texture;
+    int w = 0, h = 0;
+    gpu::Format format = gpu::Format::BGRA8;
+    uint64_t used = 0;
+} g_upscale_targets[2]; // a presenter can compose twice a frame (game rectangle, then drawable)
+uint64_t g_upscale_uses = 0;
+gpu::Texture upscaled(gpu::Device *device, gpu::CommandBuffer cb, const CompositorInput &in, gpu::Texture src,
+                      CompositeRect dst) {
+    if (!g_upscaling.load(std::memory_order_relaxed) || !src || in.hdr_scene || in.hdr_linear)
+        return {};
+    const gpu::TextureDesc sd = device->describe(src);
+    const int w = int(std::lround(dst.w)), h = int(std::lround(dst.h));
+    if (sd.width <= 0 || sd.height <= 0 || w * 10 < sd.width * 11 || h * 10 < sd.height * 11 || w > 8192 ||
+        h > 8192 || (sd.format != gpu::Format::BGRA8 && sd.format != gpu::Format::RGBA8))
+        return {};
+    UpscaleTarget *pick = &g_upscale_targets[0];
+    for (UpscaleTarget &c : g_upscale_targets)
+        if (c.device == device && c.texture && c.w == w && c.h == h && c.format == sd.format) {
+            pick = &c;
+            break;
+        } else if (c.used < pick->used) {
+            pick = &c;
+        }
+    UpscaleTarget &t = *pick;
+    t.used = ++g_upscale_uses;
+    if (t.device != device || !t.texture || t.w != w || t.h != h || t.format != sd.format) {
+        if (t.texture && t.device == device) {
+            const gpu::Texture old = t.texture;
+            device->on_complete(cb, [device, old](gpu::CommandStatus, double) { device->destroy(old); });
+        }
+        t = {};
+        gpu::TextureDesc d;
+        d.width = w;
+        d.height = h;
+        d.format = sd.format;
+        d.usage = gpu::UsageSampled | gpu::UsageRenderTarget | gpu::UsageStorage;
+        t.texture = device->create_texture(d);
+        if (!t.texture)
+            return {};
+        t.device = device, t.w = w, t.h = h, t.format = sd.format, t.used = g_upscale_uses;
+    }
+    return device->spatial_upscale(cb, src, t.texture) ? t.texture : gpu::Texture{};
+}
 // Encode a textured compositor quad with explicit destination, UVs and alpha convention.
 // Reject empty or wholly offscreen rectangles before issuing draw commands.
 void draw(Pass &pass, const CompositorInput &in, gpu::Texture tex, CompositeRect dst,
@@ -370,6 +422,10 @@ bool compositor_resolve_scene(CompositorSceneHistory *history, CompositorInput *
     return true;
 }
 
+void compositor_set_upscaling(bool on) {
+    g_upscaling.store(on, std::memory_order_relaxed);
+}
+
 void compositor_compose(gpu::Device *device, const CompositorInput *in, gpu::Texture out,
                         gpu::CommandBuffer cb) {
     if (!device || !valid(in) || !out || !cb)
@@ -377,6 +433,14 @@ void compositor_compose(gpu::Device *device, const CompositorInput *in, gpu::Tex
     const gpu::TextureDesc desc = device->describe(out);
     if (desc.width != in->drawable_w || desc.height != in->drawable_h)
         return;
+    // The frame's main picture and where it goes; enlarged now, outside the pass, when upscaling.
+    const CompositeRect main_rect =
+        in->legacy || in->classic || boxed_scene(*in)
+            ? pixel_rect(whole_rect(*in, false))
+            : CompositeRect{0, 0, double(in->drawable_w), double(in->drawable_h)};
+    const gpu::Texture main_src =
+        in->legacy ? in->legacy_frame : in->cls == HOST_SCREEN_GAMEPLAY ? in->world : gpu::Texture{};
+    const gpu::Texture main_up = upscaled(device, cb, *in, main_src, main_rect);
     Pass pass{device, cb, desc.format, {}};
     gpu::RenderPass rp;
     rp.color_count = 1;
@@ -398,7 +462,7 @@ void compositor_compose(gpu::Device *device, const CompositorInput *in, gpu::Tex
         }
     };
     if (in->legacy) {
-        draw(pass, *in, in->legacy_frame, pixel_rect(whole_rect(*in, false)), full_uv, Opaque,
+        draw(pass, *in, main_up ? main_up : in->legacy_frame, main_rect, full_uv, Opaque,
              in->hdr_linear ? 2 : in->hdr_scene ? 1 : 0);
         if (in->settings_page)
             draw(pass, *in, in->settings_page, drawn_settings_page_rect(*in), full_uv, Straight, 0, false);
@@ -410,11 +474,7 @@ void compositor_compose(gpu::Device *device, const CompositorInput *in, gpu::Tex
     const auto elements = ordered(in->ui);
     const auto registry = registry_snapshot();
     if (in->cls == HOST_SCREEN_GAMEPLAY)
-        draw(pass, *in, in->world,
-             in->classic || boxed_scene(*in)
-                 ? pixel_rect(whole_rect(*in, false))
-                 : CompositeRect{0, 0, double(in->drawable_w), double(in->drawable_h)},
-             full_uv, Opaque, in->hdr_scene ? 1 : 0);
+        draw(pass, *in, main_up ? main_up : in->world, main_rect, full_uv, Opaque, in->hdr_scene ? 1 : 0);
     for (const auto *e : elements) {
         const auto dst = element_rect(*in, *e, registry);
         if (dst.x >= in->drawable_w || dst.y >= in->drawable_h || dst.x + dst.w <= 0 ||

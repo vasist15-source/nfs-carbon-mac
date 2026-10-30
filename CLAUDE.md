@@ -441,6 +441,16 @@ Explain findings plainly and keep commands copy-pasteable.
    scale -> colour key -> encode (simple bounding-box DXT encoder). Source is the
    surface's CPU copy. Callers: 007d7580 (texture copy when formats differ),
    00759040 (per mip), 00732ca0 (boot).
+21. MetalFX upscaling (git, 2026-10-31; CONFIRMED running by the user's log 2026-10-31: "gpu: MetalFX spatial
+   upscaling 1920x1080 -> 3420x1924", 5907 frames, no new faults): gpu::Device::spatial_upscale (default false;
+   metal_device.mm: MTLFXSpatialScaler, perceptual colour, cached per in/out size + format, needs
+   supportsDevice + Private storage + the descriptor's usages; MetalFX framework in host/gpu/CMakeLists.txt).
+   compositor.cpp upscaled(): the main frame (legacy frame, or gameplay world) goes through it into one of 2
+   cached targets when it is enlarged by >= 10%, BGRA8/RGBA8 and not HDR; then the quad draws that target
+   (sampling ~1:1). Anything refused -> the old smooth stretch. compositor_set_upscaling() from present_thread
+   hdr_poll every 30 polls, setting core.nfsc/upscaling (Graphics, live, default on). Render scale "Screen"
+   draws at full size, so nothing is upscaled there. Metal 4 / frame interpolation judged not worth it (no
+   motion vectors; already 60 fps).
 20. F10 menu on native glass (git, 2026-10-27; CONFIRMED working by the user 2026-10-29): host/sdl/
    menu_glass_mac.mm (macOS desktop app only; RECOMP_MENU_GLASS=0 turns it off): a pass-through container
    (hitTest nil, so SDL still gets every event and input_gate maps the pointer by page fractions as before)

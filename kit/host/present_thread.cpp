@@ -264,6 +264,9 @@ struct Service : std::enable_shared_from_this<Service> {
     unsigned hdr_switches_seen = 0;
     double hdr_audio_reopen_at = 0;
     void hdr_poll() {
+        // MetalFX upscaling of the game's frame (compositor_set_upscaling), on the same beat.
+        if (hdr_polls % 30 == 0)
+            compositor_set_upscaling(mods_setting_value("core.nfsc/upscaling", 1) != 0);
         if (++hdr_polls % 30 != 1 || !chain)
             return;
         const bool setting = mods_setting_value("core.nfsmw/hdr_output", 0) != 0;

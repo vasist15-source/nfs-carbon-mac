@@ -4,6 +4,7 @@
 #include "../../../platform/os.h"
 
 #import <CoreVideo/CVHostTime.h>
+#import <MetalFX/MetalFX.h>
 
 #include <algorithm>
 #include <chrono>
@@ -773,6 +774,55 @@ void MetalDevice::blit(CommandBuffer cb, Texture src, Region r, Texture dst, int
                      destinationSlice:0
                      destinationLevel:0
                     destinationOrigin:MTLOriginMake(dst_x, dst_y, 0)];
+}
+// MetalFX's spatial scaler: an edge-aware enlargement of a game frame drawn smaller than the
+// screen. Perceptual: the frame's values are gamma-encoded (UNORM), as the game drew them.
+bool MetalDevice::spatial_upscale(CommandBuffer cb, Texture src, Texture dst) {
+    @autoreleasepool {
+        std::lock_guard lock(mutex_);
+        Cmd *c = cmd(cb);
+        auto s = textures_.find(src.id), d = textures_.find(dst.id);
+        if (scaler_unsupported_ || !c || s == textures_.end() || d == textures_.end())
+            return false;
+        id<MTLTexture> in = s->second.texture, out = d->second.texture;
+        const NSUInteger key[6] = {in.width, in.height, out.width, out.height, NSUInteger(in.pixelFormat),
+                                   NSUInteger(out.pixelFormat)};
+        if (!scaler_ || memcmp(key, scaler_key_, sizeof key) != 0) {
+            scaler_ = nil;
+            if (![MTLFXSpatialScalerDescriptor supportsDevice:device_]) {
+                scaler_unsupported_ = true;
+                printf("gpu: MetalFX spatial upscaling is not supported on this GPU\n");
+                return false;
+            }
+            MTLFXSpatialScalerDescriptor *desc = [MTLFXSpatialScalerDescriptor new];
+            desc.inputWidth = in.width;
+            desc.inputHeight = in.height;
+            desc.outputWidth = out.width;
+            desc.outputHeight = out.height;
+            desc.colorTextureFormat = in.pixelFormat;
+            desc.outputTextureFormat = out.pixelFormat;
+            desc.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;
+            scaler_ = [desc newSpatialScalerWithDevice:device_];
+            if (!scaler_)
+                return false;
+            memcpy(scaler_key_, key, sizeof key);
+            printf("gpu: MetalFX spatial upscaling %lux%lu -> %lux%lu\n", (unsigned long)in.width,
+                   (unsigned long)in.height, (unsigned long)out.width, (unsigned long)out.height);
+            fflush(stdout);
+        }
+        id<MTLFXSpatialScaler> scaler = scaler_;
+        if ((in.usage & scaler.colorTextureUsage) != scaler.colorTextureUsage ||
+            (out.usage & scaler.outputTextureUsage) != scaler.outputTextureUsage ||
+            out.storageMode != MTLStorageModePrivate)
+            return false;
+        end_encoders(*c);
+        scaler.colorTexture = in;
+        scaler.outputTexture = out;
+        scaler.inputContentWidth = in.width;
+        scaler.inputContentHeight = in.height;
+        [scaler encodeToCommandBuffer:c->buffer];
+        return true;
+    }
 }
 void MetalDevice::copy_buffer_to_texture(CommandBuffer cb, Buffer src, uint64_t offset, int pitch,
                                          Texture dst, Region r) {

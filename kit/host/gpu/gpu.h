@@ -205,6 +205,10 @@ class Device {
     virtual void copy_texture_to_buffer(CommandBuffer cb, Texture src, Region src_region,
                                         Buffer dst, uint64_t offset, int pitch) = 0;
     virtual void generate_mipmaps(CommandBuffer cb, Texture t) = 0;
+    // An edge-aware enlargement of `src` into `dst` (larger, made with UsageSampled |
+    // UsageRenderTarget | UsageStorage), encoded outside any pass: MetalFX's spatial scaler on
+    // Metal. False when the backend has none or the textures do not suit it; nothing is encoded.
+    virtual bool spatial_upscale(CommandBuffer, Texture /*src*/, Texture /*dst*/) { return false; }
 
     // Runs on a backend thread after the buffer finishes; `status` says how.
     virtual void on_complete(CommandBuffer cb,

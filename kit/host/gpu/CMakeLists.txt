@@ -94,8 +94,8 @@ if(ANDROID)
   target_link_libraries(gpu_backend PUBLIC vulkan)
 endif()
 if(APPLE)
-  target_link_libraries(gpu_backend PUBLIC "-framework Metal" "-framework QuartzCore" "-framework CoreVideo"
-                                           "-framework CoreGraphics" "-framework Foundation")
+  target_link_libraries(gpu_backend PUBLIC "-framework Metal" "-framework MetalFX" "-framework QuartzCore"
+                                           "-framework CoreVideo" "-framework CoreGraphics" "-framework Foundation")
 endif()
 pop_optimize(gpu_backend 1)
 

@@ -62,6 +62,7 @@ class MetalDevice final : public Device {
     void copy_texture_to_buffer(CommandBuffer cb, Texture src, Region src_region, Buffer dst,
                                 uint64_t offset, int pitch) override;
     void generate_mipmaps(CommandBuffer cb, Texture t) override;
+    bool spatial_upscale(CommandBuffer cb, Texture src, Texture dst) override;
     void on_complete(CommandBuffer cb, std::function<void(CommandStatus, double)> fn) override;
     void commit(CommandBuffer cb) override;
     void wait(CommandBuffer cb) override;
@@ -130,6 +131,11 @@ class MetalDevice final : public Device {
     std::mutex mutex_;
     uint64_t next_id_ = 1;
     bool diagnostics_ = false;
+    // The MetalFX spatial scaler (id<MTLFXSpatialScaler>), made for one input/output size and
+    // format pair (scaler_key_); spatial_upscale remakes it when they change.
+    id scaler_ = nil;
+    NSUInteger scaler_key_[6] = {};
+    bool scaler_unsupported_ = false;
     std::atomic<unsigned> diagnostic_reports_{0};
     std::unordered_map<uint64_t, Tex> textures_;
     std::unordered_map<uint64_t, id<MTLBuffer>> buffers_;
