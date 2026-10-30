@@ -1,5 +1,9 @@
 # Need for Speed: Carbon — Native for Apple Silicon Macs
 
+
+<img width="1710" height="1107" alt="Screenshot 2026-10-10 at 5 58 31 PM" src="https://github.com/user-attachments/assets/fa1c42ff-4a63-4c6f-98d3-0a1411428b9c" />
+
+
 A native macOS build of the 2006 PC game, made by **static recompilation**: the game's own x86 code is
 translated to C ahead of time and compiled for Apple Silicon, with a Metal renderer, native audio and
 native controller support. There is no emulator, no Wine and no CrossOver.
