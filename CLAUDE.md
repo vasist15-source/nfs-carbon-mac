@@ -294,6 +294,11 @@ Explain findings plainly and keep commands copy-pasteable.
   `git archive HEAD`, so commit first). `Setup --snapshot DIR` renders every window state;
   `Setup --selftest GAME OUT` runs check + build headless. No @State in SwiftUI views: the macOS 27
   Command Line Tools have no SwiftUI macro plugin.
+- setup.sh Python (issue #5, 2026-11-04): only 3.9-3.12 (python3.12/3.11/3.10, then the CLT's /usr/bin/python3):
+  numpy==2.0.2 (kit texture-pack pin, unused by Carbon's build) has no cp313+ wheel, so a Homebrew/python.org 3.13
+  picked first failed pip and showed the "can't reach pypi.org" message. A .venv outside 3.9-3.12 is remade (the app
+  keeps .venv across updates); pip runs --only-binary :all: into build/setup.log; the network message only when the
+  log shows a connection error, else the Python version + pip's last ERROR line.
 - setup.py pins NFSC.exe (game.toml sha256) and the stock msvcr71/msvcp71 hashes (game.toml's
   addresses inside them are for those exact files).
 
