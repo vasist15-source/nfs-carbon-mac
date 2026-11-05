@@ -619,6 +619,17 @@ Ported from MW legacy-3.x on 2026-11-05 (kit tests pass apart from failures that
   instead of sentinels; volume textures; then the user's mods (XtendedInput,
   widescreen, Extra Options, HD reflections; MW's mods/core/nfsmw is the template).
 
+## Judder at 60 fps: uneven physics steps (FIXED 2026-11-06, user: "feels much better")
+- Symptom: counter at 60 fps but motion not smooth. Cause measured (temporary per-frame hook, removed): the main loop
+  006b7930 passes the frame time [0x00a99a5c] (006b4cb0, the game's QPC clock quantized to 1/3600 s, wobbles about
+  +-1.5 ms around 16.67 even when real frames are even, sd 0.45 ms) to the sim service 00761150: accumulator
+  [0x00b4d7ec] += dt, floor(acc / (1/60)) fixed steps (max 8; [0x00b4cfe0] = sim running). When the remainder sat
+  near 0 or a whole step, on-time frames flipped 0 steps (world frozen a refresh) / 2 steps (jump): 10-40 pairs per
+  10 s in half the samples, up to 131. Fix mods/core/nfsc/smooth_sim.h (REPLACE 00761150, hook slot 28, setting
+  smooth_sim, Graphics, live, default on): before each call the remainder is pulled 10% (max 0.25 ms) towards half
+  a step. After: 0 pairs in nearly all 46 samples (only next to really late frames). Game time stays within 8.3 ms
+  of real time.
+
 ## Stutter while driving (investigated 2026-11-05, NOT fixed)
 - Symptom: 60 fps most minutes, but some minutes 8-245 refreshes repeat a frame (busy city/race: 52-57 fps).
 - Per-frame hitch logger (temporary, removed; patch kept only in that session's scratchpad): on late frames
