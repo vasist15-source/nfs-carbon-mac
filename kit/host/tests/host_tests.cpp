@@ -10030,6 +10030,71 @@ static void test_display_settings_bridge() {
     CHECK(display_offered_modes == supported);
 }
 
+// 3.0.2: the D3D9 limit on the presenter's refresh slots. A producer that sleeps in whole milliseconds (early or late
+// by up to 2 ms, early by up to 0.5 ms, as the scheduler wakes it) never gets two frames into one slot, keeps the display's rate even when
+// the display is 59.94 Hz or 120 Hz paced at 60, and a slow frame starts a new phase instead of bursting. Control: the
+// separate-clock FrameDeadline at 60 fps against a 59.94 Hz presenter puts two frames into some slots.
+static void test_slot_pacer() {
+    uint32_t rng = 12345;
+    auto rnd = [&](int lo, int hi) { rng = rng * 1103515245u + 12345u; return lo + int((rng >> 8) % uint32_t(hi - lo + 1)); };
+    for (double period : {1.0 / 60, 1.0 / 59.94, 2.0 / 120.0}) {
+        SlotPacer pacer;
+        std::map<int64_t, int> per_slot;
+        double now = 1000.123;
+        int presented = 0;
+        for (int i = 0; i < 1200; ++i) {
+            for (int tries = 0; tries < 4; ++tries) {   // as Dev_Present: wait again after an early wake
+                const uint32_t ms = pacer.wait_ms(now, period);
+                if (!ms)
+                    break;
+                now += (int(ms) * 1000 + rnd(-500, 2000)) / 1e6;   // wakes up to 0.5 ms early or 2 ms late
+            }
+            pacer.presented(now, period);
+            ++per_slot[SlotPacer::slot(now, period)];
+            ++presented;
+            now += rnd(2, 14) / 1000.0;   // the next frame's work, inside one slot
+        }
+        int doubled = 0;
+        for (auto &kv : per_slot)
+            doubled += kv.second > 1;
+        CHECK_EQ(doubled, 0);
+        const double span = double(per_slot.rbegin()->first - per_slot.begin()->first + 1);
+        CHECK_NEAR(presented / span, 1.0, 0.02);
+    }
+    {   // slow frames (25 ms of work at 60): every other slot, no wait, no burst after a pause
+        SlotPacer pacer;
+        double now = 50.0;
+        const double period = 1.0 / 60;
+        for (int i = 0; i < 100; ++i) {
+            CHECK_EQ(pacer.wait_ms(now, period), 0u);
+            pacer.presented(now, period);
+            now += 0.025;
+        }
+        now += 5.0;
+        now = (std::floor(now / period) + 0.5) * period;   // mid-slot
+        CHECK_EQ(pacer.wait_ms(now, period), 0u);
+        pacer.presented(now, period);
+        CHECK(pacer.wait_ms(now + 0.001, period) > 0);
+        CHECK(pacer.wait_ms(now + 0.001, period) <= 17u);
+    }
+    {   // control: the separate clock at 60 against a 59.94 Hz display beats (two frames in some slots)
+        FrameDeadline deadline;
+        std::map<int64_t, int> per_slot;
+        int64_t ns = 0;
+        const double period = 1.0 / 59.94;
+        for (int i = 0; i < 60 * 60; ++i) {
+            ns += int64_t(deadline.wait_ms(ns)) * 1000000;
+            ++per_slot[SlotPacer::slot(ns / 1e9 + 0.0001, period)];
+            deadline.begin(60, ns);
+            ns += 5000000;
+        }
+        int doubled = 0;
+        for (auto &kv : per_slot)
+            doubled += kv.second > 1;
+        CHECK(doubled >= 2);
+    }
+}
+
 static void test_native_frame_metrics() {
     // D3D9 paces at Present: wait on the preceding slot, publish, then
     // reserve the next. Count rendering work once and leave the first
@@ -11436,6 +11501,7 @@ int main(int argc, char **argv) {
     mem_init();
     test_fullscreen_edge_presentation();
     test_native_frame_metrics();
+    test_slot_pacer();
     test_wide_cursor_bound();
     test_pointer_reaches_scrolling_edges();
     test_native_overlay_pixels();

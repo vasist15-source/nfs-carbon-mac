@@ -2133,6 +2133,18 @@ extern "C" double host_present_refresh_delay(int intervals) {
     return next > now ? next - now : 0.0;
 }
 
+// 3.0.2: the presenter's clock (device seconds) and paced period, for a frame limit that follows the refresh slots
+// (SlotPacer). 0 on a headless presenter or one without a device: the caller keeps its own clock then.
+extern "C" int host_present_slot_clock(double *now, double *period) {
+    auto s = active.load();
+    if (!s || s->fake || !s->device)
+        return 0;
+    std::lock_guard lock(s->mutex);
+    *period = s->frame_period > 0 ? s->frame_period : 1.0 / 60;
+    *now = s->device->now_seconds();
+    return 1;
+}
+
 extern "C" void host_present_seal_window() {
     auto s = active.load();
     if (!s)

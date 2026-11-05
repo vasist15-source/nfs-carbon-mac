@@ -216,6 +216,8 @@ endif()
 # The settings menu on a native glass panel (menu_glass.h): the macOS desktop app only.
 if(APPLE AND NOT IOS)
   list(APPEND POP_PLATFORM_UI ${HOST}/sdl/menu_glass_mac.mm)
+  # The window screen's refresh rate for the presenter's pacing (120 Hz panels; from NFSMW 3.0.3).
+  list(APPEND POP_PLATFORM_UI ${HOST}/sdl/os_display_macos.mm)
   set_source_files_properties(${HOST}/sdl/menu_glass_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   list(APPEND FW_METAL "-framework AppKit")
 endif()

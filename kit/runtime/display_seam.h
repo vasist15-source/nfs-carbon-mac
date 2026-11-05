@@ -43,6 +43,12 @@ void host_display_present_window(const uint32_t *argb, int w, int h);
 // on - when a Present with a sync interval returns. Zero on a headless
 // presenter. The caller waits in the scheduler, never in the host.
 double host_present_refresh_delay(int intervals);
+// The presenter's clock (seconds) and paced period; 0 without a display presenter (3.0.2).
+int host_present_slot_clock(double *now, double *period);
+// The presenter's totals: new frames shown, frames dropped, refreshes that repeated a frame (0 without one).
+uint64_t host_present_unique_completed(void);
+uint64_t host_present_drops(void);
+uint64_t host_present_repeats(void);
 bool ddraw_gdi_primary_active(void);
 #ifdef __cplusplus
 }

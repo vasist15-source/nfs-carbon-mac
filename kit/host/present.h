@@ -387,3 +387,5 @@ extern "C" void host_present_seal_window(void);
 // Seconds to the presenter's next refresh boundary, `intervals` refreshes
 // on; zero on a headless presenter. The caller waits it out itself.
 extern "C" double host_present_refresh_delay(int intervals);
+// The presenter's clock (seconds) and paced period; 0 without a display presenter (3.0.2, SlotPacer).
+extern "C" int host_present_slot_clock(double *now, double *period);

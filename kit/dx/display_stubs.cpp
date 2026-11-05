@@ -28,6 +28,19 @@ extern "C" {
 __attribute__((weak)) double host_present_refresh_delay(int) {
     return 0.0;
 }
+// No presenter: the D3D9 frame limit keeps its own clock.
+__attribute__((weak)) int host_present_slot_clock(double *, double *) {
+    return 0;
+}
+__attribute__((weak)) uint64_t host_present_unique_completed() {
+    return 0;
+}
+__attribute__((weak)) uint64_t host_present_drops() {
+    return 0;
+}
+__attribute__((weak)) uint64_t host_present_repeats() {
+    return 0;
+}
 
 // Without a host GPU the Direct3D 11 shim rasterizes everything itself.
 __attribute__((weak)) int host_gpu2d_available(void) {

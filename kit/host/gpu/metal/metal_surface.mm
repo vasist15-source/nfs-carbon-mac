@@ -66,6 +66,12 @@ void lifecycle_observe() {
 } // namespace
 #endif
 
+// From NFSMW 3.0.3 (NFSU1 run 8): the refresh of the screen the game window is on (host/sdl/main.cpp, AppKit's
+// maximumFramesPerSecond: 120 on a ProMotion panel or a TV set to 120 Hz). 0 when no host reports it (tests).
+extern "C" __attribute__((weak)) double host_window_refresh_hz(void) {
+    return 0;
+}
+
 double MetalDevice::refresh_period(Swapchain s) {
 #if !TARGET_OS_IPHONE
     lifecycle_observe();
@@ -79,6 +85,9 @@ double MetalDevice::refresh_period(Swapchain s) {
 #if TARGET_OS_IPHONE
     hz = [UIScreen mainScreen].maximumFramesPerSecond;
 #else
+    hz = host_window_refresh_hz();
+    if (hz > 1.0)
+        return 1.0 / hz;
     // The layer does not know its display; the main display's rate is what the
     // AppKit host's CVDisplayLink reported for a single-display machine. Apple
     // laptops report 0 for an adaptive panel, which reads as 60.

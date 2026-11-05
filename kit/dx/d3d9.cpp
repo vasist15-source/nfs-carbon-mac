@@ -508,7 +508,9 @@ void Dev_Reset(X86 *c) {
         bind_color_target(dev, i, nullptr);
     device_forget_buffers(dev);
     dev->present_deadline = FrameDeadline{};
+    dev->present_slots = SlotPacer{};
     dev->present_fps = 0;
+    dev->present_locked = -1;
     ComObj *bb = device_backbuffer(dev);
     D9Pipeline &pl = d9_pipeline(dev->id);
     bind_color_target(dev, 0, bb);
@@ -671,20 +673,56 @@ void Dev_Present(X86 *c) {
     ComObj *dev = this_device9(c);
     if (dev) {
         const int fps = recomp_env("PIN_CLOCK") ? 0 : mods_display_fps();
-        if (fps != dev->present_fps) {
+        // 3.0.2: when the presenter paces at the limit itself (60 on a 120 Hz or 60 Hz display), follow its refresh
+        // slots on its clock (SlotPacer, frame_deadline.h); RECOMP_PRESENT_OWN_CLOCK=1 keeps the separate clock (A/B).
+        double pnow = 0, pperiod = 0;
+        static const bool own_clock = recomp_env("PRESENT_OWN_CLOCK") != nullptr;
+        const int locked = fps > 0 && !own_clock && host_present_slot_clock(&pnow, &pperiod) &&
+                           std::fabs(pperiod * fps - 1.0) < 0.03;
+        if (fps != dev->present_fps || locked != dev->present_locked) {
             dev->present_deadline = FrameDeadline{};
+            dev->present_slots = SlotPacer{};
             dev->present_fps = fps;
-            LOGW("d3d9: completed-frame limit %d fps (0 = unlimited)", fps);
+            dev->present_locked = locked;
+            LOGW("d3d9: completed-frame limit %d fps (0 = unlimited)%s", fps,
+                 locked ? ", on the display's refresh slots" : "");
         }
         // Wait for the previous frame's deadline, then reserve the next
         // slot. Rendering work counts toward the period, the first frame is
         // immediate, and late frames never accumulate a catch-up backlog.
         // Yield the guest baton so audio/input workers continue to run.
         // Only presentation is paced; game clocks and simulation are intact.
-        const uint32_t ms = dev->present_deadline.wait_ms(os_monotonic_ns());
-        if (ms)
-            guest_sleep_ms(ms);
-        dev->present_deadline.begin(fps, os_monotonic_ns());
+        if (locked) {
+            // Wait again if the scheduler woke the guest a little before the slot (at most three short waits).
+            for (int tries = 0; tries < 4; ++tries) {
+                const uint32_t ms = dev->present_slots.wait_ms(pnow, pperiod);
+                if (!ms)
+                    break;
+                guest_sleep_ms(ms);
+                if (!host_present_slot_clock(&pnow, &pperiod))
+                    break;
+            }
+            dev->present_slots.presented(pnow, pperiod);
+        } else {
+            const uint32_t ms = dev->present_deadline.wait_ms(os_monotonic_ns());
+            if (ms)
+                guest_sleep_ms(ms);
+            dev->present_deadline.begin(fps, os_monotonic_ns());
+        }
+        // 3.0.2: once a minute, what the display got (the owner's "59.5" check): new frames shown, frames the
+        // presenter dropped (two in one slot), refreshes that repeated a frame (the game was late).
+        static int64_t pace_t0 = 0;
+        static uint64_t pace_u0 = 0, pace_d0 = 0, pace_r0 = 0;
+        const int64_t pace_now = os_monotonic_ns();
+        if (!pace_t0 || pace_now - pace_t0 >= 60000000000LL) {
+            const uint64_t u = host_present_unique_completed(), d = host_present_drops(), r = host_present_repeats();
+            if (pace_t0 && u >= pace_u0)
+                LOGW("d3d9: frame pacing, last %.0f s: %llu frames shown (%.2f fps), %llu dropped, %llu repeated (%s)",
+                     (pace_now - pace_t0) / 1e9, (unsigned long long)(u - pace_u0),
+                     (u - pace_u0) / ((pace_now - pace_t0) / 1e9), (unsigned long long)(d - pace_d0),
+                     (unsigned long long)(r - pace_r0), dev->present_locked == 1 ? "refresh slots" : "own clock");
+            pace_t0 = pace_now, pace_u0 = u, pace_d0 = d, pace_r0 = r;
+        }
     }
     ComObj *bb = dev ? device_backbuffer(dev) : nullptr;
     if (bb && gpu_on()) {

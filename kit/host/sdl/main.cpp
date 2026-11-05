@@ -181,6 +181,28 @@ std::atomic<int> g_screen_w{0}, g_screen_h{0};
 // display where there is no such strip.
 std::atomic<int> g_fullscreen_w{0}, g_fullscreen_h{0};
 extern "C" __attribute__((weak)) double host_mac_safe_top_points(void);
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
+extern "C" double os_window_max_fps(void *ns_window); // host/sdl/os_display_macos.mm
+#endif
+// From NFSMW 3.0.3 (NFSU1 run 8): the highest refresh of the screen the window is on, for the presenter's pacing
+// (metal_surface.mm refresh_period): AppKit's maximumFramesPerSecond (120 on a ProMotion panel, which CoreGraphics
+// reports as 0), else SDL's mode rate. Written on the main thread, read by the presenter.
+std::atomic<double> g_window_hz{0};
+void note_window_refresh(SDL_DisplayID display) {
+    double hz = 0;
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
+    if (g_window)
+        hz = os_window_max_fps(SDL_GetPointerProperty(SDL_GetWindowProperties(g_window),
+                                                      SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, nullptr));
+#endif
+    if (!(hz > 1))
+        if (const SDL_DisplayMode *mode = SDL_GetDesktopDisplayMode(display))
+            hz = mode->refresh_rate;
+    if (hz > 1 && std::fabs(hz - g_window_hz.load()) > 0.5)
+        fprintf(stderr, "[host] display refresh: %.0f Hz (the window's screen)\n", hz);
+    if (hz > 1)
+        g_window_hz.store(hz);
+}
 void note_screen_size() {
     int w = 0, h = 0;
     SDL_DisplayID display = g_window ? SDL_GetDisplayForWindow(g_window) : SDL_GetPrimaryDisplay();
@@ -200,6 +222,7 @@ void note_screen_size() {
             h = int(std::lround(bounds.h * density));
         }
     }
+    note_window_refresh(display);
     if (w <= 0 || h <= 0)
         return;
     int fh = h;
@@ -217,6 +240,11 @@ void note_screen_size() {
     g_screen_h.store(h);
     g_fullscreen_w.store(w);
     g_fullscreen_h.store(fh);
+}
+// The presenter's pacing reads the window screen's refresh (metal_surface.mm refresh_period; a weak default there
+// answers 0 in binaries without this host).
+extern "C" double host_window_refresh_hz(void) {
+    return g_window_hz.load();
 }
 extern "C" int host_display_fullscreen_size(int *w, int *h) {
     const int fw = g_fullscreen_w.load(), fh = g_fullscreen_h.load();

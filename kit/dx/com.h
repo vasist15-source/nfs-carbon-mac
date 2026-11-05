@@ -302,7 +302,9 @@ struct ComObj {
     bool in_scene = false;
     // D3D9 devices pace completed frames independently of game simulation.
     FrameDeadline present_deadline;
+    SlotPacer present_slots;          // 3.0.2: the limit on the presenter's refresh slots when it paces at the limit
     int present_fps = 0;
+    int present_locked = -1;          // 1 slots, 0 own clock, -1 not decided yet
     std::vector<uint32_t> viewports;
     uint32_t render_state[D3D_RENDERSTATE_MAX] = {0};
     uint32_t light_state[D3D_LIGHTSTATE_MAX] = {0};
