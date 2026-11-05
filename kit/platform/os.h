@@ -139,6 +139,15 @@ int os_exe_path(char *buf, size_t cap); // 0 or -1; NUL-terminated
 // where the platform has no equivalent yet.
 typedef void (*OsFaultFn)(const char *what);
 int os_install_fault_handlers(OsFaultFn fn);
+// For use inside the OsFaultFn: where the fault was in HOST code. The POSIX
+// handler fills it from the signal's context before calling the OsFaultFn (on
+// macOS: pc and lr of the faulting instruction, si_addr, and the main
+// executable's load address, so `atos -o <exe> -l <image_load> <pc>` names the
+// function); zeros where the platform does not provide it.
+typedef struct OsFaultInfo {
+    uint64_t pc, lr, addr, image_load;
+} OsFaultInfo;
+void os_fault_info(OsFaultInfo *out);
 // For use inside a fault handler: a raw write to the error stream and an
 // immediate process exit, neither of which touches stdio or runs destructors.
 void os_write_stderr_raw(const char *s, size_t n);

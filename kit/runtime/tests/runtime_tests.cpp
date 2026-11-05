@@ -23,6 +23,7 @@
 #include <stdarg.h>
 #include <map>
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <set>
 #include <string>
@@ -2884,6 +2885,136 @@ static void creation_polling_wndproc(X86 *c) {
         g_creation_service_passes = g_service_loops - before;
     }
     set_eax(c, 1);
+}
+
+// ---------------------------------------------------------------------------
+// Thread and handle creation against parked workers (run 23,
+// review/run22/snd-crash.md). A worker parked in Sleep wakes under g_sched_m
+// WITHOUT the baton and reads the scheduler's thread list and the handle table
+// (sched_wait_locked, sched_expire_locked), so the baton holder must not change
+// those containers outside that lock. Built with ThreadSanitizer
+// (harness/r23/tsan_sched.sh, `runtime_tests --sched-race`) the unlocked push
+// is reported as a data race; in an ordinary build this checks that every
+// thread still ends.
+// ---------------------------------------------------------------------------
+static uint32_t g_race_stop = 0; // guest-side: ordered by the baton handoff
+static uint32_t g_race_sleeps = 0;
+static void race_sleeper_thread(X86 *c) {
+    uint32_t sleepfn = imports_resolve("KERNEL32.dll", "Sleep");
+    while (!g_race_stop) {
+        ++g_race_sleeps;
+        uint32_t esp = c->r[R_ESP];
+        uint32_t sp = esp;
+        sp -= 4;
+        wr32(sp, 1);
+        sp -= 4;
+        wr32(sp, 0x00401000);
+        c->r[R_ESP] = sp;
+        imports_dispatch(c, sleepfn);
+        c->r[R_ESP] = esp;
+    }
+    set_eax(c, 0x51ee);
+}
+static void race_quick_thread(X86 *c) {
+    set_eax(c, 0x0c0c);
+}
+static std::atomic<int> g_race_signal_stop{0};
+static std::atomic<int> g_race_signals{0};
+// Wakes every parked worker over and over, the way the audio host and the
+// deadline ticker do at start-up.
+static void *race_signal_thread(void *arg) {
+    while (!g_race_signal_stop.load()) {
+        guest_event_signal_from_host((uint32_t)(uintptr_t)arg);
+        g_race_signals.fetch_add(1);
+        os_sleep_us(100);
+    }
+    return nullptr;
+}
+
+// Walks the scheduler's containers under its lock, back to back, as woken
+// workers do: the reader TSan needs beside every unlocked change (run 23: the
+// real wakes are too rare inside the microseconds between a push and the next
+// lock to show the race reliably).
+static std::atomic<int> g_race_census_stop{0};
+static std::atomic<uint32_t> g_race_census_walks{0};
+static void *race_census_thread(void *) {
+    while (!g_race_census_stop.load()) {
+        sched_census_locked_walk();
+        g_race_census_walks.fetch_add(1);
+    }
+    return nullptr;
+}
+
+static void test_sched_spawn_race(X86 *c) {
+    section("thread and handle creation against parked workers");
+    uint32_t pcode = scratch_block(4);
+    uint32_t sleeper = imports_alloc_trampoline("test", "race_sleeper", race_sleeper_thread, 1);
+    uint32_t quick = imports_alloc_trampoline("test", "race_quick", race_quick_thread, 1);
+    uint32_t ev = call_import(c, "KERNEL32.dll", "CreateEventA", {0, 0, 0, 0});
+    g_race_stop = 0;
+    uint32_t sleepers[3];
+    for (uint32_t &h : sleepers)
+        h = call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, sleeper, 0, 0, 0});
+    for (int i = 0; i < 20 && g_race_sleeps < 6; ++i)
+        call_import(c, "KERNEL32.dll", "Sleep", {2});
+    check(g_race_sleeps >= 3, "three sleepers are parked in Sleep (%u passes)", g_race_sleeps);
+
+    OsThread *sig = os_thread_create(race_signal_thread, (void *)(uintptr_t)ev, 0);
+    OsThread *census = os_thread_create(race_census_thread, nullptr, 0);
+    // 48 threads: the list grows through 4, 8, 16 and 32 entries, each a
+    // reallocation before the fix; 8 events made and closed per thread.
+    const int kThreads = 48, kEvents = 8;
+    std::vector<uint32_t> quick_handles;
+    uint32_t made = 0, closed = 0;
+    for (int i = 0; i < kThreads; ++i) {
+        uint32_t th = call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, quick, 0, 0, 0});
+        made += th != 0;
+        quick_handles.push_back(th);
+        for (int k = 0; k < kEvents; ++k) {
+            uint32_t e = call_import(c, "KERNEL32.dll", "CreateEventA", {0, 1, 0, 0});
+            closed += e && call_import(c, "KERNEL32.dll", "CloseHandle", {e}) != 0;
+        }
+    }
+    check(made == (uint32_t)kThreads, "created %u of %d threads while the workers were woken",
+          made, kThreads);
+    check(closed == (uint32_t)(kThreads * kEvents), "made and closed %u of %d events", closed,
+          kThreads * kEvents);
+    g_race_signal_stop.store(1);
+    os_thread_join(sig);
+    g_race_census_stop.store(1);
+    os_thread_join(census);
+    check(g_race_census_walks.load() > 0, "a host thread walked the thread list and handle table %u times meanwhile",
+          g_race_census_walks.load());
+    check(g_race_signals.load() > 0, "the host thread signalled %d times", g_race_signals.load());
+
+    g_race_stop = 1;
+    // On wall-clock time, not a poll count: a sleeper needs its 1 ms Sleep to
+    // end before it sees the stop, and counted polls run out sooner.
+    auto exit_code_within = [&](uint32_t h, double seconds) {
+        const double t0 = wall_seconds();
+        uint32_t code = 0x103;
+        while (wall_seconds() - t0 < seconds) {
+            call_import(c, "KERNEL32.dll", "GetExitCodeThread", {h, pcode});
+            code = rd32(pcode);
+            if (code != 0x103)
+                break;
+            call_import(c, "KERNEL32.dll", "Sleep", {1});
+        }
+        return code;
+    };
+    uint32_t sleepers_done = 0, quick_done = 0;
+    for (uint32_t h : sleepers) {
+        sleepers_done += exit_code_within(h, 2.0) == 0x51ee;
+        call_import(c, "KERNEL32.dll", "CloseHandle", {h});
+    }
+    for (uint32_t h : quick_handles) {
+        quick_done += exit_code_within(h, 2.0) == 0x0c0c;
+        call_import(c, "KERNEL32.dll", "CloseHandle", {h});
+    }
+    check(sleepers_done == 3, "the sleepers ended (%u of 3)", sleepers_done);
+    check(quick_done == (uint32_t)kThreads, "every created thread ran and ended (%u of %d)",
+          quick_done, kThreads);
+    call_import(c, "KERNEL32.dll", "CloseHandle", {ev});
 }
 
 static void test_scheduling(X86 *c) {
@@ -6838,6 +6969,19 @@ int main(int argc, char **argv) {
         return heap_alloc(0xffffffffu) == 0 ? 0 : 4;
     }
 
+    if (argc == 2 && strcmp(argv[1], "--sched-race") == 0) {
+        // Only the scheduler race check: the ThreadSanitizer build runs this.
+        mem_init();
+        imports_init();
+        if (!loader_load(nullptr))
+            return 2;
+        X86 *c = loader_context();
+        loader_init_context(c);
+        scratch = 0x0ee00000;
+        test_sched_spawn_race(c);
+        printf("\n%d sched-race checks, %d failures\n", g_checks, g_failures);
+        return g_failures ? 1 : 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--thunks-only") == 0) {
         mem_init();
         imports_init();
@@ -6912,6 +7056,7 @@ int main(int argc, char **argv) {
     test_guest_thunks(c);
     test_callbacks(c);
     test_scheduling(c);
+    test_sched_spawn_race(c);
     test_exit_process_stops_workers(c);
     test_mod_seams(c);
     test_input_wakes_a_parked_thread(c);

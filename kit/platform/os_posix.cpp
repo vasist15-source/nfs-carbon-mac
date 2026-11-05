@@ -1027,7 +1027,25 @@ int os_exe_path(char *buf, size_t cap) {
 }
 
 static OsFaultFn g_fault_fn = nullptr;
-static void fault_trampoline(int sig) {
+// Written by the handler (plain stores, signal-safe), read by g_fault_fn.
+static OsFaultInfo g_fault_info;
+static uint64_t g_image_load = 0; // taken at install, never inside the handler
+static void fault_trampoline(int sig, siginfo_t *info, void *uc_) {
+    g_fault_info.addr = info ? (uint64_t)(uintptr_t)info->si_addr : 0;
+    g_fault_info.image_load = g_image_load;
+#if defined(__APPLE__) && defined(__aarch64__)
+    const ucontext_t *uc = (const ucontext_t *)uc_;
+    if (uc && uc->uc_mcontext) {
+        g_fault_info.pc = (uint64_t)__darwin_arm_thread_state64_get_pc(uc->uc_mcontext->__ss);
+        g_fault_info.lr = (uint64_t)__darwin_arm_thread_state64_get_lr(uc->uc_mcontext->__ss);
+    }
+#elif defined(__APPLE__) && defined(__x86_64__)
+    const ucontext_t *uc = (const ucontext_t *)uc_;
+    if (uc && uc->uc_mcontext)
+        g_fault_info.pc = (uint64_t)uc->uc_mcontext->__ss.__rip;
+#else
+    (void)uc_;
+#endif
     const char *what = sig == SIGSEGV   ? "SIGSEGV"
                        : sig == SIGBUS  ? "SIGBUS"
                        : sig == SIGABRT ? "an abort from the runtime"
@@ -1036,10 +1054,23 @@ static void fault_trampoline(int sig) {
 }
 int os_install_fault_handlers(OsFaultFn fn) {
     g_fault_fn = fn;
-    signal(SIGSEGV, fault_trampoline);
-    signal(SIGBUS, fault_trampoline);
-    signal(SIGABRT, fault_trampoline);
+#ifdef __APPLE__
+    // Image 0 is the main executable; its header is where it was loaded.
+    g_image_load = (uint64_t)(uintptr_t)_dyld_get_image_header(0);
+#endif
+    // SA_SIGINFO for the context; no SA_RESETHAND, and SA_RESTART, as signal() had.
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = fault_trampoline;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, nullptr);
+    sigaction(SIGBUS, &sa, nullptr);
+    sigaction(SIGABRT, &sa, nullptr);
     return 1;
+}
+void os_fault_info(OsFaultInfo *out) {
+    *out = g_fault_info;
 }
 
 void os_write_stderr_raw(const char *s, size_t n) {

@@ -409,6 +409,25 @@ void fault_handler(const char *name) {
     sig_write(" EBP=");
     sig_write_hex8(c->r[R_EBP]);
     sig_write("\n");
+    // Where the host was: a fault inside a runtime shim (the scheduler, an
+    // import) leaves EIP at the last guest return address, which cannot fault.
+    OsFaultInfo fi;
+    os_fault_info(&fi);
+    if (fi.pc) {
+        sig_write("[host] host pc=");
+        sig_write_hex8((uint32_t)(fi.pc >> 32));
+        sig_write_hex8((uint32_t)fi.pc);
+        sig_write(" lr=");
+        sig_write_hex8((uint32_t)(fi.lr >> 32));
+        sig_write_hex8((uint32_t)fi.lr);
+        sig_write(" addr=");
+        sig_write_hex8((uint32_t)(fi.addr >> 32));
+        sig_write_hex8((uint32_t)fi.addr);
+        sig_write(" image=");
+        sig_write_hex8((uint32_t)(fi.image_load >> 32));
+        sig_write_hex8((uint32_t)fi.image_load);
+        sig_write("\n");
+    }
     if (c->r[R_ESP] < STACK_LIMIT || c->r[R_ESP] >= STACK_TOP)
         sig_write("[host] the guest stack pointer is outside the main stack: it "
                   "overflowed, lost it, or this is a worker on its own stack\n");

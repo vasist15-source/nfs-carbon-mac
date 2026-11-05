@@ -410,6 +410,10 @@ bool host_guest_yield();
 // soon as the signal lands, not when its timeout expires. A null or
 // INVALID_HANDLE_VALUE handle is ignored.
 void guest_event_signal_from_host(uint32_t handle);
+// Test seam (runtime_tests --sched-race): from a host thread, walk the guest
+// thread list and the handle table under the scheduler lock, as a woken worker
+// does; returns live threads + event handles.
+uint32_t sched_census_locked_walk();
 
 // ---------------------------------------------------------------------------
 // What the run thread does instead of parking in the scheduler.

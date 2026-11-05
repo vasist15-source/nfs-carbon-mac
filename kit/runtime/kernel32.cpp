@@ -153,11 +153,24 @@ std::map<uint32_t, HObj> &handles() {
 }
 uint32_t g_next_handle = 0x00010004;
 
+// The scheduler's lock (defined with the scheduler below). The handle table is
+// read under it by threads that do not hold the baton: a woken waiter re-checks
+// its wait (sched_expire_locked) before it is handed the baton. So every insert
+// and erase takes it too; a tree rebalanced or a node freed under that reader
+// was the SND DAC thread's start-up crash (review/run22/snd-crash.md). Callers
+// never hold it: these run from guest imports and from start-up.
+extern std::mutex g_sched_m;
+
 uint32_t handle_new(HKind kind) {
+    std::lock_guard<std::mutex> l(g_sched_m);
     uint32_t h = g_next_handle;
     g_next_handle += 4;
     handles()[h].kind = kind;
     return h;
+}
+void handle_erase(uint32_t h) {
+    std::lock_guard<std::mutex> l(g_sched_m);
+    handles().erase(h);
 }
 HObj *handle_get(uint32_t h, HKind kind) {
     auto it = handles().find(h);
@@ -546,7 +559,10 @@ void win32_init(const std::string &game_dir) {
     g_envblockw_addr = 0;
     for (uint32_t i = 0; i < TLS_SLOTS; ++i)
         g_tls_used[i] = false;
-    handles().clear();
+    {
+        std::lock_guard<std::mutex> l(g_sched_m);
+        handles().clear();
+    }
     modules().clear();
     vm_regions().clear();
     dir_cache().clear();
@@ -637,7 +653,7 @@ void k_HeapCreate(X86 *c) {
     set_eax(c, handle_new(H_HEAP));
 }
 void k_HeapDestroy(X86 *c) {
-    handles().erase(arg(c, 0));
+    handle_erase(arg(c, 0));
     set_eax(c, 1);
 }
 
@@ -934,7 +950,7 @@ void k_CloseHandle(X86 *c) {
     }
     if ((o->kind == H_FILE || o->kind == H_MAPPING) && o->fd >= 0)
         os_fd_close(o->fd);
-    handles().erase(h);
+    handle_erase(h);
     set_eax(c, 1);
 }
 
@@ -1012,7 +1028,7 @@ void k_FindNextFileA(X86 *c) {
 }
 
 void k_FindClose(X86 *c) {
-    handles().erase(arg(c, 0));
+    handle_erase(arg(c, 0));
     set_eax(c, 1);
 }
 
@@ -1972,6 +1988,9 @@ static void (*g_thread_exit_observer)() = nullptr;
 // queued here under the scheduler lock and applied by the next thread to enter
 // the scheduler, which by construction is the baton holder.
 std::vector<uint32_t> g_host_signals;
+// Run 23 (TSan): how many are queued, for sched_checkpoint's lock-free peek (it
+// read g_host_signals.empty() without the lock while a host thread pushed).
+std::atomic<uint32_t> g_host_signals_n{0};
 // ---------------------------------------------------------------------------
 // Idling on the run thread.
 //
@@ -2022,6 +2041,9 @@ GuestThread *cur_thread() {
         m->id = 1;
         m->teb = TEB_BASE;
         m->tls = TLS_BASE;
+        // Room for every thread a game starts, so the vector a parked worker
+        // indexes is never moved (thread_spawn also holds g_sched_m to grow it).
+        threads().reserve(64);
         threads().push_back(m);
         g_baton = 0;
     }
@@ -2571,6 +2593,7 @@ void apply_host_signals_locked() {
             o->signalled = true;
     }
     g_host_signals.clear();
+    g_host_signals_n.store(0, std::memory_order_relaxed);
 }
 
 void sched_expire_locked() {
@@ -2984,6 +3007,7 @@ void guest_event_signal_from_host(uint32_t handle) {
         return;
     g_sched_m.lock();
     g_host_signals.push_back(handle);
+    g_host_signals_n.store((uint32_t)g_host_signals.size(), std::memory_order_relaxed);
     g_sched_cv.notify_all();
     g_sched_m.unlock();
 }
@@ -2995,6 +3019,19 @@ void guest_event_signal_from_host(uint32_t handle) {
 // that would post the message cannot run and the wait becomes a deadlock.
 bool host_guest_yield() {
     return guest_yield();
+}
+
+// Test seam (run 23, runtime_tests --sched-race): what a woken worker does to the
+// scheduler's containers before it holds the baton (sched_expire_locked), from
+// a host thread: walk the thread list and the handle table under g_sched_m.
+uint32_t sched_census_locked_walk() {
+    std::lock_guard<std::mutex> l(g_sched_m);
+    uint32_t n = 0;
+    for (GuestThread *t : threads())
+        n += t && !t->finished;
+    for (const auto &kv : handles())
+        n += kv.second.kind == H_EVENT;
+    return n;
 }
 
 // The guest stack pointers of this thread's open sched_atomic_enter stretches,
@@ -3021,7 +3058,7 @@ void sched_checkpoint() {
     // Drain first and unconditionally: a guest with no worker threads never
     // reaches the scheduler proper, and a signal it never applied is a wait
     // that never ends.
-    if (!g_host_signals.empty()) {
+    if (g_host_signals_n.load(std::memory_order_relaxed)) {
         g_sched_m.lock();
         apply_host_signals_locked();
         g_sched_m.unlock();
@@ -3505,10 +3542,20 @@ bool thread_spawn(uint32_t h) {
         delete t;
         return false;
     }
-    threads().push_back(t);
+    // Under g_sched_m: woken workers read threads() under it without the baton
+    // (sched_wait_locked, sched_expire_locked), and a push that reallocates
+    // frees the block they index. Released before the host thread starts: its
+    // first act is to take the lock and wait for the baton.
+    {
+        std::lock_guard<std::mutex> l(g_sched_m);
+        threads().push_back(t);
+    }
     OsThread *host = os_thread_create(thread_host_main, t, 0);
     if (!host) {
-        threads().pop_back();
+        {
+            std::lock_guard<std::mutex> l(g_sched_m);
+            threads().pop_back();
+        }
         if (loader_tls().index != 0xffffffffu)
             heap_free(rd32(t->tls + 4 * loader_tls().index));
         heap_free(t->stack_lo);
@@ -4704,7 +4751,7 @@ void find_first_named(X86 *c, const std::string &pattern, bool wide) {
         std::string host_dir = dirpart.empty() ? win32_host_path_op(".", WIN32_FILE_LIST)
                                                : win32_host_path_op(dirpart, WIN32_FILE_LIST);
         if (host_dir.empty()) {
-            handles().erase(h);
+            handle_erase(h);
             set_last_error(ERROR_PATH_NOT_FOUND_);
             set_eax(c, INVALID_HANDLE_VALUE_);
             return;
@@ -4717,7 +4764,7 @@ void find_first_named(X86 *c, const std::string &pattern, bool wide) {
             }
     }
     if (o.matches.empty()) {
-        handles().erase(h);
+        handle_erase(h);
         set_last_error(ERROR_FILE_NOT_FOUND_);
         set_eax(c, INVALID_HANDLE_VALUE_);
         return;

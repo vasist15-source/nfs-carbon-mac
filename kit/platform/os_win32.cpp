@@ -596,6 +596,10 @@ int os_install_fault_handlers(OsFaultFn fn) {
     SetUnhandledExceptionFilter(fault_filter);
     return 1;
 }
+void os_fault_info(OsFaultInfo *out) {
+    // The filter already prints the exception record; nothing more here yet.
+    memset(out, 0, sizeof *out);
+}
 void os_write_stderr_raw(const char *s, size_t n) {
     DWORD written = 0;
     WriteFile(GetStdHandle(STD_ERROR_HANDLE), s, (DWORD)n, &written, nullptr);
