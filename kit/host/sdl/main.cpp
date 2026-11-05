@@ -29,6 +29,7 @@
 #include "../d3d_render.h"
 #include "../game_path.h"
 #include "../menu_glass.h"
+#include "../perf_glass.h"
 #include "../launcher/launcher_sdl.h"
 #include "../gpu/gpu_factory.h"
 #include "../input.h"
@@ -1738,6 +1739,7 @@ void pump() {
     update_idle_cursor();
     host_gate_pointer_tick();
     host_menu_glass_tick(g_window);
+    host_perf_glass_tick(g_window); // after the menu's: its container stays on top
 }
 
 // The runtime's idle wait, called on the run thread when the guest is about to
@@ -1764,6 +1766,7 @@ int idle_wait(double seconds) {
     after_events();
     update_idle_cursor();
     host_menu_glass_tick(g_window);
+    host_perf_glass_tick(g_window); // after the menu's: its container stays on top
     return changed;
 }
 

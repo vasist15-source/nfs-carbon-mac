@@ -1,4 +1,5 @@
 #include "performance_overlay.h"
+#include "perf_glass.h"
 
 #include "../mods/mods_internal.h"
 
@@ -149,3 +150,9 @@ void PerformanceOverlay::draw(gpu::Device *device, gpu::CommandBuffer cb, gpu::T
     device->draw(cb, gpu::Primitive::TriangleStrip, 0, 4);
     device->end_render_pass(cb);
 }
+
+// The macOS host defines these (sdl/perf_glass_mac.mm); every other host draws the overlay above.
+__attribute__((weak)) bool host_perf_glass_publish(int, const FramePacingSnapshot &, int, double) {
+    return false;
+}
+__attribute__((weak)) void host_perf_glass_tick(void *) {}

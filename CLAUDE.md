@@ -469,6 +469,13 @@ Ported from MW legacy-3.x on 2026-11-05 (kit tests pass apart from failures that
    redraw publishes to the glass views. Log: "mods: settings menu paused the game" / "resumed ... after N s".
    Not yet ported from 3.0.4: Check for updates (kit/host/update_check.cpp), Save bug report, thread start
    captured at CreateThread (kernel32), mute in background, deadzones.
+26. Performance overlay on native glass (2026-11-06; user: "looks really good"): host/perf_glass.h +
+   host/sdl/perf_glass_mac.mm (macOS desktop app only; RECOMP_PERF_GLASS=0 = old Metal overlay): pass-through
+   container right above the SDL Metal view (ticked after the menu's, so the F10 menu stays on top), Liquid Glass
+   panel top-right (below safeAreaInsets.top), SF monospaced digits, fps coloured green/orange/red vs the limit,
+   graph = CAShapeLayers (green / red late bars, dashed budget). present_thread publishes the snapshot (<= 4 Hz)
+   and skips PerformanceOverlay::draw unless a capture run is on (its marker lines stay Metal). Weak defaults in
+   performance_overlay.cpp.
 21. MetalFX upscaling (git, 2026-10-31; CONFIRMED running by the user's log 2026-10-31: "gpu: MetalFX spatial
    upscaling 1920x1080 -> 3420x1924", 5907 frames, no new faults): gpu::Device::spatial_upscale (default false;
    metal_device.mm: MTLFXSpatialScaler, perceptual colour, cached per in/out size + format, needs

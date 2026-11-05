@@ -6,6 +6,7 @@
 #include "present_frame.h"
 #include "present_test.h"
 #include "performance_overlay.h"
+#include "perf_glass.h"
 #include "gpu_time.h"
 #include "d3d_render.h"
 #include "input_gate.h"
@@ -1088,9 +1089,15 @@ struct Service : std::enable_shared_from_this<Service> {
                     std::lock_guard lock(mutex);
                     snapshot = pacing.snapshot(ts, drops);
                 }
-                performance_overlay.draw(device, cb, drawable, drawable_desc.width,
-                                         drawable_desc.height, snapshot, ts, mods_display_overlay(),
-                                         mods_display_fps(), f->diagnostic, f->frame_id);
+                // On macOS the overlay is native glass views (perf_glass.h); a capture run keeps the
+                // Metal overlay for its marker lines.
+                const bool capture = f->diagnostic.enabled;
+                if (!host_perf_glass_publish(capture ? 0 : mods_display_overlay(), snapshot,
+                                             mods_display_fps(), ts) ||
+                    capture)
+                    performance_overlay.draw(device, cb, drawable, drawable_desc.width,
+                                             drawable_desc.height, snapshot, ts, mods_display_overlay(),
+                                             mods_display_fps(), f->diagnostic, f->frame_id);
                 const controls::ControlsView controls_view = host_present_controls();
                 if (controls_view.wanted)
                     controls_overlay.draw(device, cb, drawable, drawable_desc.width,
