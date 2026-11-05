@@ -45,8 +45,10 @@ icons).
   - Graphics: full screen, borderless or windowed; render resolution (the game's own
     resolution by default, 1.5x for smoother edges, or the full screen); sharper upscaling to the
     screen with Apple's MetalFX (on by default); frame limit (original,
-    40, 60, or an experimental 120 FPS); world texture filtering up to 16x anisotropic; a
-    performance overlay with frame times (also F11).
+    40, 60, or an experimental 120 FPS); world texture filtering up to 16x anisotropic; even
+    physics steps (smooth motion at 60 FPS, on by default); the game's sound mixer on its own CPU
+    core (on by default); a performance overlay with frame times on a Liquid Glass panel (also F11).
+    The game pauses while the page is open.
   - Mods: skip intro movies, hide the closed online modes, how much you see to the sides, no
     rubberbanding (opponents don't catch up), and cheats (off by default: infinite nitrous and
     speedbreaker, engine power, opponent engine power).
