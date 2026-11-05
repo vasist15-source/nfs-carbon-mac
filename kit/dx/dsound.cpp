@@ -79,7 +79,7 @@ void pcm_release(uint32_t addr) {
         if (pcm_refs()[i].first != addr)
             continue;
         if (--pcm_refs()[i].second == 0) {
-            heap_free(addr);
+            heap_free_guarded(addr);
             pcm_refs().erase(pcm_refs().begin() + (ptrdiff_t)i);
         }
         return;
@@ -119,6 +119,9 @@ ComObj *this_buffer(X86 *c) {
 // through guest_event_signal_from_host, which queues it for the scheduler.
 // ---------------------------------------------------------------------------
 const uint32_t DSBPN_OFFSETSTOP = 0xffffffffu;
+// The gap on each side of a sample ring (heap_alloc_guarded): wider than the
+// largest block a mixer writes in one go (a 10 ms tick of 7.1 at 48 kHz is 7.5 KB).
+const uint32_t DSOUND_RING_GUARD = 0x00004000u;
 
 struct NotifyPos {
     uint32_t offset = 0;
@@ -647,6 +650,7 @@ void Buffer_GetFrequency(X86 *c) {
 }
 
 void Buffer_GetStatus(X86 *c) {
+    heap_readonly_report(); // NFSMW issue 8: the sound thread asks this every 10 ms
     ComObj *b = this_buffer(c);
     uint32_t out = arg(c, 1);
     if (!b || !out || !gm_valid(out, 4)) {
@@ -897,6 +901,15 @@ void Buffer_Unlock(X86 *c) {
     // anything else is re-submitted.
     uint32_t off = b->lock_off, len = b->lock_len;
     b->lock_off = b->lock_len = 0;
+    // The guest has just written: its own ring's gaps now, every guarded
+    // block about once a second (thread stacks, the other rings).
+    heap_guard_check(b->buf_pixels);
+    heap_readonly_report(); // NFSMW issue 8: any write to a sound buffer object that was stopped
+    {
+        static uint32_t unlocks;
+        if (++unlocks % 128u == 0)
+            heap_guard_check_all();
+    }
     // The step across the seam between this run and the one before it, in the
     // ring rather than in the call sequence: the sample immediately before
     // `off` is the last one the previous run wrote, because the guest writes
@@ -1510,7 +1523,10 @@ void DS_CreateSoundBuffer(X86 *c) {
     } else {
         read_wave_format(b, wfx);
         b->buf_bytes = bytes;
-        b->buf_pixels = heap_alloc(bytes, true, 16);
+        // A gap on each side of the samples (NFSMW issue 8): the buffer's own
+        // COM view is allocated next, and a write off the end of the ring
+        // must not reach it.
+        b->buf_pixels = heap_alloc_guarded(bytes, true, DSOUND_RING_GUARD, "dsound buffer", b->id);
         pcm_retain(b->buf_pixels);
         if (!b->buf_pixels) {
             com_release(b);
@@ -1528,6 +1544,16 @@ void DS_CreateSoundBuffer(X86 *c) {
     com_out_ptr(out, view);
     LOGV("dsound: created a %s buffer of %u bytes (flags %08x)", primary ? "primary" : "secondary",
          bytes, flags);
+    {   // 3.0.4 (issue 8): where each buffer's samples and object are, the first 8, for a log beside the game's own
+        static uint32_t placed;
+        if (placed++ < 8u) {
+            if (primary)
+                LOGW("dsound: buffer %u (primary): object %08x", b->id, view);
+            else
+                LOGW("dsound: buffer %u: samples %08x..%08x, object %08x", b->id, b->buf_pixels,
+                     b->buf_pixels + b->buf_bytes, view);
+        }
+    }
     com_ret(c, DS_OK);
 }
 

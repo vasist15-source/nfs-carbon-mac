@@ -1889,6 +1889,7 @@ void k_WaitForMultipleObjects(X86 *c) {
 // -------------------------------------------------------------------------
 const uint32_t STILL_ACTIVE_ = 0x103;
 const uint32_t THREAD_STACK_BYTES = 0x00040000u; // 256 KB, committed
+const uint32_t THREAD_STACK_GUARD = 0x00004000u; // 16 KB gap each side (heap_alloc_guarded)
 const uint32_t WAIT_TIMEOUT_ = 0x102;
 
 // What a blocked thread is waiting for.  A blocked thread is not runnable and
@@ -3454,13 +3455,15 @@ bool request_process_exit(uint32_t code) {
 // a TLS array with the image's initial block and all other slots zeroed.
 // Returns false when the guest heap cannot supply them.
 bool thread_prepare_context(GuestThread *t) {
-    t->stack_lo = heap_alloc(THREAD_STACK_BYTES, true, 16);
+    // Gaps below and above the stack (NFSMW issue 8): the first-fit heap puts
+    // the next small kit object right against its low end.
+    t->stack_lo = heap_alloc_guarded(THREAD_STACK_BYTES, true, THREAD_STACK_GUARD, "thread stack", t->id);
     if (!t->stack_lo)
         return false;
     t->stack_hi = t->stack_lo + THREAD_STACK_BYTES;
     uint32_t block = heap_alloc(TEB_SIZE + TLS_SLOTS * 4, true, 16);
     if (!block) {
-        heap_free(t->stack_lo);
+        heap_free_guarded(t->stack_lo);
         t->stack_lo = 0;
         return false;
     }
@@ -3481,7 +3484,7 @@ bool thread_prepare_context(GuestThread *t) {
     wr32(t->teb + 0x2c, t->tls);
     if (!loader_tls_block_for_thread(t->tls) && loader_tls().index != 0xffffffffu) {
         heap_free(t->teb);
-        heap_free(t->stack_lo);
+        heap_free_guarded(t->stack_lo);
         t->teb = t->tls = t->stack_lo = t->stack_hi = 0;
         return false;
     }
@@ -3558,7 +3561,7 @@ bool thread_spawn(uint32_t h) {
         }
         if (loader_tls().index != 0xffffffffu)
             heap_free(rd32(t->tls + 4 * loader_tls().index));
-        heap_free(t->stack_lo);
+        heap_free_guarded(t->stack_lo);
         heap_free(t->teb);
         delete t;
         return false;

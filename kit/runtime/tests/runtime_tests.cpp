@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include <stdarg.h>
 #include <map>
 #include <algorithm>
@@ -1091,6 +1092,106 @@ static void test_allocator() {
         check(text.find(frame) != std::string::npos, "refusal log includes the guest return chain");
         remove_tree(dir);
     }
+}
+
+// NFSMW issue 8: a guest write that runs off the end of a bulk-written block
+// (a DirectSound ring, a thread stack) must land in the block's gap, not on the
+// small kit object the first-fit heap puts next to it.
+static void test_heap_guard() {
+    section("heap guard");
+    uint32_t hits0 = heap_guard_hits();
+    // Control: the old layout, where the first-fit heap put the 16-byte view
+    // straight after its ring (264576 bytes, a multiple of 16, so no slack).
+    uint32_t ring = heap_alloc(264576 + 16, true, 16);
+    uint32_t view = ring + 264576;
+    check(ring != 0, "control: an unguarded ring with the object against its end (%08x)", ring);
+    wr32(view + 4, 0x504f504du);
+    for (uint32_t i = 0; i < 16; i += 2)
+        wr16(ring + 264576 + i, 0x6a29);
+    check(rd32(view + 4) != 0x504f504du, "control: a write past the unguarded ring's end lands on the object");
+    heap_free(ring);
+
+    uint32_t g = heap_alloc_guarded(264576, true, 0x4000, "dsound buffer", 164);
+    uint32_t v = heap_alloc(16, true, 16);
+    check(g && v, "a guarded ring and the next object: %08x, %08x", g, v);
+    check(v >= g + 264576 + 0x4000 || v + 16 <= g - 0x4000, "the next object is outside the ring's gaps");
+    check(rd32(g) == 0 && rd32(g + 264572) == 0, "the guarded ring is zeroed");
+    check(heap_guard_check(g), "an untouched guarded ring checks clean");
+    wr32(v + 4, 0x504f504du);
+    for (uint32_t i = 0; i < 16; i += 2)
+        wr16(g + 264576 + i, 0x6a29);
+    check(rd32(v + 4) == 0x504f504du, "a write past the guarded ring's end leaves the next object alone");
+    check(!heap_guard_check(g) && heap_guard_hits() == hits0 + 1, "the write is found and counted once");
+    check(heap_guard_check(g), "the gap is filled again after the report");
+    wr8(g - 1, 0x00);
+    check(heap_guard_check_all() == 1 && heap_guard_hits() == hits0 + 2,
+          "a write just before the start is found by the sweep");
+    check(heap_free_guarded(g), "a guarded block frees");
+    check(heap_guard_check(g), "a freed guarded block is no longer tracked");
+    heap_free(v);
+    uint32_t plain = heap_alloc(64);
+    check(heap_free_guarded(plain), "heap_free_guarded frees a plain block too");
+    check(heap_check().empty(), "the heap is consistent after the guard checks");
+}
+
+// NFSMW issue 8 (3.0.3): a write to a sealed read-only page is stopped in the fault handler and recorded; the
+// object keeps what the kit wrote and the writer goes on.
+static void readonly_test_fault(const char *what) {
+    fprintf(stderr, "runtime_tests: unexpected %s in the read-only page test\n", what);
+    _exit(3);
+}
+static void test_heap_kit_span() {
+    section("heap kit span");
+    uint32_t k = heap_alloc_kit(0x10000, true, 16);
+    uint32_t g = heap_alloc(0x10000, true, 16);
+    const uint32_t top = GUEST_HEAP_EXTRA_BASE + GUEST_HEAP_EXTRA_SIZE;
+    if (GUEST_HEAP_EXTRA_SIZE < 0x08000000u) {
+        check(k != 0, "no extra span: a kit object comes from the shared heap (%08x)", k);
+    } else {
+        check(k >= top - 0x02000000u && k < top, "a kit object is in the kit span at the top (%08x)", k);
+        check(g && (g < top - 0x02000000u), "a guest block is outside the kit span (%08x)", g);
+        uint32_t big = heap_alloc(GUEST_HEAP_EXTRA_SIZE - 0x01000000u);
+        check(big == 0 || big + GUEST_HEAP_EXTRA_SIZE - 0x01000000u <= top - 0x02000000u,
+              "a guest block never reaches into the kit span (%08x)", big);
+        if (big)
+            heap_free(big);
+    }
+    uint32_t r = heap_realloc(g, 0x20000, true);
+    check(r && !(r >= top - 0x02000000u && r < top), "a grown guest block stays out of the kit span (%08x)", r);
+    heap_free(r);
+    heap_free(k);
+    check(heap_check().empty(), "the heap is consistent after the kit span checks");
+}
+
+static void test_heap_readonly() {
+    section("heap read-only pages");
+    setenv("RECOMP_READONLY_PAGES", "1", 1); // opt-in from 3.0.4
+    if (!heap_readonly_enabled()) {
+        ++g_skips;
+        printf("  [skip] read-only pages need macOS on arm64\n");
+        return;
+    }
+    os_install_fault_handlers(readonly_test_fault);
+    const uint32_t hits0 = heap_readonly_hits();
+    uint32_t v = heap_alloc_readonly(16, "dsound buffer object", 164);
+    check(v && v % (uint32_t)os_vm_page_size() == 0, "a read-only page is page-aligned (%08x)", v);
+    wr32(v, 0x031dce80u);
+    wr32(v + 4, 0x504f504du);
+    check(rd32(v + 4) == 0x504f504du, "control: the page takes writes before it is sealed");
+    check(heap_seal_readonly(v), "the page seals");
+    wr32(v + 4, 0x74db0bcdu);
+    wr16(v + 2, 0x74e2);
+    check(rd32(v + 4) == 0x504f504du && rd32(v) == 0x031dce80u, "writes to the sealed page are stopped, the object intact");
+    check(heap_readonly_hits() == hits0 + 2, "both stopped writes are counted (%u)", heap_readonly_hits() - hits0);
+    heap_readonly_report();
+    check(rd32(v) == 0x031dce80u, "reads of the sealed page work");
+    check(heap_free_guarded(v), "a sealed page frees");
+    uint32_t again = heap_alloc(64, true, 16);
+    wr32(again, 7);
+    check(rd32(again) == 7, "memory allocated after the free takes writes");
+    heap_free(again);
+    check(heap_check().empty(), "the heap is consistent after the read-only checks");
+    unsetenv("RECOMP_READONLY_PAGES");
 }
 
 static void test_heap_shims(X86 *c) {
@@ -7038,6 +7139,9 @@ int main(int argc, char **argv) {
     scratch = 0x0ee00000; // scratch area below the stack, inside the arena
 
     test_allocator();
+    test_heap_guard();
+    test_heap_readonly();
+    test_heap_kit_span();
     test_heap_shims(c);
     test_memory_shims_2(c);
     test_files(c);
