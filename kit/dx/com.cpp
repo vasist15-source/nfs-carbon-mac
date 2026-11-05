@@ -6,6 +6,7 @@
 #include <deque>
 
 std::deque<std::unique_ptr<ComObj>> *g_com_objects = nullptr; // see com.h com_get
+std::atomic<ComIndex *> g_com_index{nullptr};                  // see com.h com_get
 
 namespace {
 
@@ -36,6 +37,8 @@ void bury(uint32_t id) {
         if (old && old <= objects().size()) {
             std::unique_ptr<ComObj> &slot = objects()[old - 1];
             if (slot && !slot->alive) {
+                if (ComIndex *ix = g_com_index.load(std::memory_order_relaxed); ix && old <= ix->size)
+                    __atomic_store_n(&ix->slots[old - 1], (ComObj *)nullptr, __ATOMIC_RELEASE);
                 slot.reset();
                 ++g_com_freed;
             }
@@ -93,6 +96,11 @@ uint32_t build_vtable(const VtDef &d) {
 // Lifetime
 // ---------------------------------------------------------------------------
 void com_reset() {
+    if (ComIndex *ix = g_com_index.load(std::memory_order_relaxed)) { // ids start again at 1
+        for (uint32_t i = 0; i < ix->size; ++i)
+            __atomic_store_n(&ix->slots[i], (ComObj *)nullptr, __ATOMIC_RELEASE);
+        __atomic_store_n(&ix->size, 0u, __ATOMIC_RELEASE);
+    }
     objects().clear();
     graveyard().clear();
     g_com_freed = 0;
@@ -111,6 +119,20 @@ ComObj *com_new(ComKind kind) {
     o.kind = kind;
     o.refs = 1;
     o.alive = true;
+    // Publish in the lookup array (com.h): grow by copying into a new array; the old one stays readable.
+    ComIndex *ix = g_com_index.load(std::memory_order_relaxed);
+    if (!ix || ix->size >= ix->capacity) {
+        auto *grown = new ComIndex;
+        grown->capacity = ix ? ix->capacity * 2 : 4096;
+        grown->slots = new ComObj *[grown->capacity]();
+        grown->size = ix ? ix->size : 0;
+        for (uint32_t i = 0; ix && i < ix->size; ++i)
+            grown->slots[i] = ix->slots[i];
+        g_com_index.store(grown, std::memory_order_release); // `ix` is never freed: a reader may hold it
+        ix = grown;
+    }
+    __atomic_store_n(&ix->slots[ix->size], &o, __ATOMIC_RELEASE);
+    __atomic_store_n(&ix->size, ix->size + 1, __ATOMIC_RELEASE);
     return &o;
 }
 

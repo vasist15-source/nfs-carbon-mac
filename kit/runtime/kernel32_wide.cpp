@@ -412,16 +412,12 @@ void k_FileTimeToLocalFileTime(X86 *c) {
 // atomic with respect to each other, as the Interlocked shims above assume.
 void k_InterlockedCompareExchange(X86 *c) {
     uint32_t p = arg(c, 0), exchange = arg(c, 1), comparand = arg(c, 2);
-    uint32_t old = rd32(p);
-    if (old == comparand)
-        wr32(p, exchange);
-    set_eax(c, old);
+    // Host atomics (runtime/x86.h): a free-running guest thread may do the same at the same moment.
+    set_eax(c, atomic_cmpxchg32(p, comparand, exchange));
 }
 void k_InterlockedExchangeAdd(X86 *c) {
     uint32_t p = arg(c, 0), value = arg(c, 1);
-    uint32_t old = rd32(p);
-    wr32(p, old + value);
-    set_eax(c, old);
+    set_eax(c, atomic_xadd32(p, value));
 }
 void k_SetThreadIdealProcessor(X86 *c) {
     set_eax(c, 0); // previous ideal processor

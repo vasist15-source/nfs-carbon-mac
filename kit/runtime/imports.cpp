@@ -12,6 +12,7 @@ void sched_checkpoint();
 #include "../platform/ab_phase.h"
 
 #include <map>
+#include <mutex>
 #include <set>
 #include <cctype>
 #include <vector>
@@ -29,7 +30,37 @@ struct Tramp {
     uint32_t calls = 0;
     // Entered without a scheduling checkpoint (see atomic_import).
     bool atomic = false;
+    // Safe to call from a free-running guest thread beside the baton holder (free_import).
+    bool free_ok = false;
+    // A DirectSound method: run under g_dsound_m, so a free-running mixer and a baton thread never meet inside one.
+    bool dsound = false;
 };
+
+// The imports a free-running guest thread (RECOMP_FREE_THREADS, kernel32_internal.h) may call without taking the
+// baton: what NFS Carbon's sound mixer calls in steady play (measured 2026-11-06), each checked to keep its state
+// under a host lock or in host atomics. Anything else takes the baton first.
+bool free_import(const std::string &dll, const std::string &name) {
+    static const char *const kernel[] = {"EnterCriticalSection", "LeaveCriticalSection", "TryEnterCriticalSection",
+                                         "Sleep", "QueryPerformanceCounter", "QueryPerformanceFrequency",
+                                         "InterlockedIncrement", "InterlockedDecrement", "InterlockedExchange",
+                                         "InterlockedExchangeAdd", "InterlockedCompareExchange", "ReleaseSemaphore"};
+    std::string d = dll;
+    for (char &ch : d)
+        ch = (char)tolower((unsigned char)ch);
+    if (d == "kernel32.dll") {
+        for (const char *k : kernel)
+            if (name == k)
+                return true;
+        return false;
+    }
+    if (d == "winmm.dll")
+        return name == "timeGetTime";
+    if (d == "dsound.dll")
+        return name == "IDirectSoundBuffer::GetCurrentPosition" || name == "IDirectSoundBuffer::Lock" ||
+               name == "IDirectSoundBuffer::Unlock";
+    return false;
+}
+std::recursive_mutex g_dsound_m;
 
 // Imports whose callers have just set up state the call reads back, with no
 // import in between: a thread switch at their entry checkpoint would let
@@ -43,7 +74,13 @@ bool atomic_import(const std::string &key) {
 // Deliberately leaked: an atexit hook (RECOMP_IMPORT_STATS) reads these after
 // static destructors would otherwise have run.
 std::vector<Tramp> &tramps() {
-    static auto *v = new std::vector<Tramp>();
+    // Reserved to the most there can be, so the vector never moves: a free-running guest thread reads an entry
+    // while the baton holder may be adding one.
+    static auto *v = [] {
+        auto *t = new std::vector<Tramp>();
+        t->reserve(TRAMP_MAX);
+        return t;
+    }();
     return *v;
 }
 std::map<std::string, uint32_t> &index() {
@@ -160,6 +197,13 @@ uint32_t imports_alloc_trampoline(const char *dll, const char *name, void (*fn)(
     }
     if (t.argc == ARGC_UNKNOWN)
         t.argc = decorated_stdcall_args(name);
+    t.free_ok = free_import(t.dll, t.name);
+    {
+        std::string d = t.dll;
+        for (char &ch : d)
+            ch = (char)tolower((unsigned char)ch);
+        t.dsound = d == "dsound.dll";
+    }
 
     uint32_t idx = (uint32_t)tramps().size();
     if (idx >= TRAMP_MAX) {
@@ -398,7 +442,8 @@ uint64_t imports_call_count() {
     return g_import_calls;
 }
 void imports_call_leaves_surfaces() {
-    --g_import_calls;
+    if (!t_guest_free)
+        --g_import_calls;
 }
 
 bool imports_dispatch(X86 *c, uint32_t target) {
@@ -412,7 +457,16 @@ bool imports_dispatch(X86 *c, uint32_t target) {
     // runs before the shim so the guest state is a consistent call boundary -
     // except at an atomic import, and inside a sched_atomic_enter stretch.
     uint32_t idx = (target - TRAMP_BASE) / TRAMP_STRIDE;
-    if (idx >= tramps().size() || !tramps()[idx].atomic)
+    // A thread RECOMP_FREE_THREADS lists runs without the baton while it calls only free_ok imports; any other
+    // import (or shutdown, or the A/B's old half) takes the baton back first, so it runs exactly as before.
+    if (RECOMP_UNLIKELY(t_guest_free_eligible)) {
+        const bool free_ok = idx < tramps().size() && tramps()[idx].free_ok && sched_free_wanted();
+        if (free_ok && !t_guest_free)
+            sched_free_enter();
+        else if (!free_ok && t_guest_free)
+            sched_free_leave();
+    }
+    if (!t_guest_free && (idx >= tramps().size() || !tramps()[idx].atomic))
         sched_checkpoint();
     if (idx >= tramps().size()) {
         // No shim to say how many arguments to drop, but the return address
@@ -440,8 +494,10 @@ bool imports_dispatch(X86 *c, uint32_t target) {
     static const bool trace = log_level() >= 2;
     // Fetched at each use: a shim or an observer may allocate a trampoline and move the table.
     auto label = [idx] { return tramps()[idx].desc.c_str(); };
-    ++tramps()[idx].calls;
-    ++g_import_calls;
+    if (!t_guest_free) { // plain counters: only the baton holder counts
+        ++tramps()[idx].calls;
+        ++g_import_calls;
+    }
 
     uint32_t ret_addr = rd32(c->r[R_ESP]);
     if (trace) {
@@ -483,7 +539,13 @@ bool imports_dispatch(X86 *c, uint32_t target) {
     if (skip) {
         // The observer refused the call and has set the result itself.
     } else if (fn) {
-        fn(c);
+        if (RECOMP_UNLIKELY(tramps()[idx].dsound)) {
+            g_dsound_m.lock();
+            fn(c);
+            g_dsound_m.unlock();
+        } else {
+            fn(c);
+        }
     } else {
         log_once(label(), "unimplemented import %s: returning 0", label());
         set_eax(c, 0);

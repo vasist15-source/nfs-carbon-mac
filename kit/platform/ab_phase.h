@@ -34,7 +34,7 @@ inline void tick() {
     else if (const uint64_t p = period_ns())
         old_phase.store((int)((os_monotonic_ns() / p) & 1), std::memory_order_relaxed);
 }
-// Which switches take part: RECOMP_AB_SWITCHES=stride,sampler,imports,view,preshader,audio (default: all).
+// Which switches take part: RECOMP_AB_SWITCHES=stride,sampler,imports,view,preshader,audio,free (default: all).
 enum : uint32_t {
     STRIDE = 1u,
     SAMPLER = 2u,
@@ -44,7 +44,8 @@ enum : uint32_t {
     AUDIO = 32u,
     CONSTS = 64u, // Test75: incremental effect constant binding (d3dx9.cpp bind_constants)
     MIRRORS = 128u, // Test75: per-draw lookups (d3d9.cpp resource mirrors, decoded programs)
-    AABB = 256u     // Test75: native bounding-box routines (native/aabb.cpp)
+    AABB = 256u,    // Test75: native bounding-box routines (native/aabb.cpp)
+    FREE = 512u     // free-running guest threads (RECOMP_FREE_THREADS): the old half keeps them on the baton
 };
 inline uint32_t switches() {
     static const uint32_t m = [] {
@@ -70,6 +71,8 @@ inline uint32_t switches() {
             bits |= MIRRORS;
         if (strstr(e, "aabb"))
             bits |= AABB;
+        if (strstr(e, "free"))
+            bits |= FREE;
         return bits;
     }();
     return m;

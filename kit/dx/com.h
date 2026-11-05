@@ -22,6 +22,7 @@
 // com_view() allocates a view lazily and caches it, so QueryInterface for the
 // same interface twice returns the same pointer.
 #pragma once
+#include <atomic>
 #include "../runtime/guest.h"
 #include "../runtime/frame_deadline.h"
 #include "../runtime/imports.h"
@@ -410,11 +411,21 @@ ComObj *com_new(ComKind kind);
 // created. Test103 (memory gate): a destroyed object is freed once more than COM_GRAVEYARD later objects have
 // been destroyed, and its slot becomes null. Ids are never reused, so a stale id still finds nothing.
 extern std::deque<std::unique_ptr<ComObj>> *g_com_objects;
+// Lookups go through a plain pointer array published with release/acquire (2026-11-06): a free-running guest
+// thread (the sound mixer, RECOMP_FREE_THREADS) looks up its DirectSound buffers while the baton holder creates
+// textures, and indexing the deque while it grows its block map is not safe. Old arrays are kept (never freed), so
+// a reader holding one still reads valid slots; objects themselves are created and freed only under the baton.
+struct ComIndex {
+    uint32_t size;      // slots filled (ids 1..size)
+    uint32_t capacity;
+    ComObj **slots;
+};
+extern std::atomic<ComIndex *> g_com_index;
 inline ComObj *com_get(uint32_t id) {
-    std::deque<std::unique_ptr<ComObj>> *v = g_com_objects;
-    if (!id || !v || id > v->size())
+    const ComIndex *ix = g_com_index.load(std::memory_order_acquire);
+    if (!id || !ix || id > __atomic_load_n(&ix->size, __ATOMIC_ACQUIRE))
         return nullptr;
-    ComObj *o = (*v)[id - 1].get();
+    ComObj *o = __atomic_load_n(&ix->slots[id - 1], __ATOMIC_ACQUIRE);
     return o && o->alive ? o : nullptr;
 }
 // The object a guest interface pointer refers to, or null when `addr` is not

@@ -174,6 +174,10 @@ int main(int argc, char **argv) {
     default:
         break;
     }
+    // The game's sound mixer on its own core (core.nfsc/mixer_own_core, default on): the runtime lets the guest
+    // thread that names itself "RWAudioCore Dac" run beside the main thread instead of taking turns with it.
+    if (mod_setting(profile, "core.nfsc/mixer_own_core", 1))
+        set_default("RECOMP_FREE_THREADS", "RWAudioCore Dac");
     // Metal shaders this Mac has compiled before, recompiled in the background
     // at start-up: a cold shader cache stalled the first frames after the EA
     // splash on a first launch (2026-10-10).

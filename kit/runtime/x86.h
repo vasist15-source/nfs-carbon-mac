@@ -207,6 +207,59 @@ RECOMP_HOT_INLINE void wr64(uint32_t a, uint64_t v) {
     memcpy(g_mem + a, &v, 8);
     recomp_watch(a, 8, v);
 }
+
+/* Locked read-modify-writes (LOCK XADD, XCHG with memory, LOCK CMPXCHG, the Interlocked* shims) as real host
+ * atomics. Under the baton only one guest thread runs, but a free-running thread (RECOMP_FREE_THREADS, the sound
+ * mixer) runs beside the holder, and an x86 LOCK must not lose either side's update. Sequentially consistent, as
+ * x86 LOCK is a full barrier. A misaligned address (never seen in practice) falls back to the plain sequence. */
+RECOMP_HOT_INLINE uint32_t atomic_xadd32(uint32_t a, uint32_t v) {
+    RECOMP_NULL_GUARD(a, 1);
+    if (RECOMP_UNLIKELY(a & 3u)) {
+        const uint32_t o = rd32(a);
+        wr32(a, o + v);
+        return o;
+    }
+    const uint32_t o = __atomic_fetch_add((uint32_t *)(g_mem + a), v, __ATOMIC_SEQ_CST);
+    recomp_watch(a, 4, o + v);
+    return o;
+}
+RECOMP_HOT_INLINE uint32_t atomic_xchg32(uint32_t a, uint32_t v) {
+    RECOMP_NULL_GUARD(a, 1);
+    if (RECOMP_UNLIKELY(a & 3u)) {
+        const uint32_t o = rd32(a);
+        wr32(a, v);
+        return o;
+    }
+    const uint32_t o = __atomic_exchange_n((uint32_t *)(g_mem + a), v, __ATOMIC_SEQ_CST);
+    recomp_watch(a, 4, v);
+    return o;
+}
+/* Stores `desired` when the dword equals `expected`; returns what was there before either way. */
+RECOMP_HOT_INLINE uint32_t atomic_cmpxchg32(uint32_t a, uint32_t expected, uint32_t desired) {
+    RECOMP_NULL_GUARD(a, 1);
+    if (RECOMP_UNLIKELY(a & 3u)) {
+        const uint32_t o = rd32(a);
+        if (o == expected)
+            wr32(a, desired);
+        return o;
+    }
+    uint32_t o = expected;
+    if (__atomic_compare_exchange_n((uint32_t *)(g_mem + a), &o, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+        recomp_watch(a, 4, desired);
+    return o;
+}
+RECOMP_HOT_INLINE uint64_t atomic_cmpxchg64(uint32_t a, uint64_t expected, uint64_t desired) {
+    if (RECOMP_UNLIKELY(a & 7u)) {
+        const uint64_t o = rd64(a);
+        if (o == expected)
+            wr64(a, desired);
+        return o;
+    }
+    uint64_t o = expected;
+    if (__atomic_compare_exchange_n((uint64_t *)(g_mem + a), &o, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+        recomp_watch(a, 8, desired);
+    return o;
+}
 RECOMP_HOT_INLINE float rdf32(uint32_t a) {
     float v;
     memcpy(&v, g_mem + a, 4);

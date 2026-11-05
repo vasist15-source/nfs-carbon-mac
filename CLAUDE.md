@@ -619,6 +619,42 @@ Ported from MW legacy-3.x on 2026-11-05 (kit tests pass apart from failures that
   instead of sentinels; volume textures; then the user's mods (XtendedInput,
   widescreen, Extra Options, HD reflections; MW's mods/core/nfsmw is the template).
 
+## Stutter while driving (investigated 2026-11-05, NOT fixed)
+- Symptom: 60 fps most minutes, but some minutes 8-245 refreshes repeat a frame (busy city/race: 52-57 fps).
+- Per-frame hitch logger (temporary, removed; patch kept only in that session's scratchpad): on late frames
+  file reads, texture create/upload, GPU settle, render-thread sync, shader/pipeline compiles were all < 1 ms.
+  Late frames = main thread's own work 12-17 ms + 5-9 ms of other guest threads holding the single baton.
+  Per 30 s: main thread 17-20 s CPU, thread 7 4-7.5 s -> the baton is ~87% busy in heavy scenes.
+- Thread 7 = EA sound mixer (CreateThread via 008daf40 -> 008a800c). `sample` (installed app has fn_/body_
+  symbols) hot spots: 008ad12e, 008ad305, 008ab884, 008b70b0, 008abbb2, 008ac988 (DSP loops), plus
+  interp_call for the heap-copied audio-bank routines (the "guest thunk fast-path miss" code runs interpreted).
+- TRIED AND REVERTED: main-thread-first scheduling (main keeps the baton up to 12 ms, others run in the
+  pacing gap), A/B in one run: better in light halves, WORSE in heavy ones (52.7-53.9 vs 58.1-59.9 fps) and the
+  user's sound cut out (host audio sink late pulls 3 -> 445). The mixer must not be delayed.
+- DONE (2026-11-06, committed; user chose to keep it, default on): mixer on its own core. RECOMP_FREE_THREADS="RWAudioCore Dac" (launch.c, setting
+  core.nfsc/mixer_own_core, default on): the thread naming itself that (SetThreadName, guest thread 7) runs without the
+  baton while it calls only imports.cpp free_ok imports (steady-state set measured: Enter/Leave/TryEnterCriticalSection
+  ~4000/s, Sleep 100/s, timeGetTime, QPC, Interlocked*, ReleaseSemaphore, IDirectSoundBuffer GetCurrentPosition/Lock/
+  Unlock ~200/s); any other import -> sched_free_leave (takes the baton). Translator: LOCK XADD / XCHG mem / LOCK
+  CMPXCHG(8B) -> host atomics (x86.h atomic_*; exe has 30 XADD, 10 XCHG, 1 CMPXCHG); Interlocked* shims atomic;
+  ReleaseSemaphore under g_sched_m; tramps() reserved to TRAMP_MAX; COM lookups via a lock-free ComIndex array; all
+  DirectSound shims under g_dsound_m. Test 1: sound perfect but free halves 17-50 fps: the main thread blocking on a
+  critical section the free mixer held slept in the host idle wait (HOST_IDLE_MAX_SLICE 50 ms, deaf to g_sched_cv).
+  Fix: a baton thread waits on g_sched_cv holding the baton (<= 20 ms) when the owner is free running; a free thread's
+  Leave/ReleaseSemaphore also calls g_idle_wake. Test 2 (light session, main 9-14 s CPU/30 s): both halves 60 fps,
+  audio 0 late, clean exit; the mixer's baton CPU 2.7-3.4 s -> 0.3-0.8 s per 30 s. Test 3 (busy, 16 min, main up to
+  17 s CPU/30 s): stable, audio 1 late pull (during the F10 pause), but late refreshes the SAME: 99 free vs 110 taking
+  turns over 15 halves each (20-36 per half in the heaviest bursts in both). So the remaining stutter is the main
+  thread's own heavy frames, not the mixer. ReleaseSemaphore's handle lookup moved under g_sched_m before commit.
+  The A/B test switching (launch.c RECOMP_AB_PERIOD/SWITCHES, d3d9 "A/B half" lines) was removed; recomp_ab FREE
+  stays for future A/Bs (RECOMP_AB_PERIOD=30 RECOMP_AB_SWITCHES=free). Log: "sched: guest thread 7 runs on its own
+  core". Turn off: F10 Graphics "Sound mixer on its own core" (restart) or RECOMP_FREE_THREADS= (empty).
+- Next for the stutter: per-frame logger again (now with the mixer out of the way) to see what the main thread does
+  in the heavy frames.
+- Next idea: make the mixer cheaper (native versions of the hot DSP loops, as MW 3.x's native/audio_mix.cpp did;
+  translate the interpreted bank routines), not reschedule it. Main-thread kit work under the game's draw
+  code (gpu_draw, put_matrices, apply_pass, queue_draw, dx_report_failure on a hot path) is the other target.
+
 ## Run the game (from Terminal, logs to a file)
 ```
 cd ~/nfsc-mac/original

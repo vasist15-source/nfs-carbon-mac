@@ -1438,6 +1438,9 @@ class Image(object):
         """Build a listing Insn from a capstone instruction."""
         words = ci.mnemonic.split()
         rep = None
+        if words[0] == "lock" and len(words) > 1:
+            rep = "LOCK"   # kept so XADD/CMPXCHG emit host atomics (as the Ghidra listing's .LOCK does)
+            words = words[1:]
         if words[0] in self.REP_PREFIX:
             rep = self.REP_PREFIX[words[0]]
             words = words[1:]
@@ -2981,6 +2984,14 @@ class Translator(object):
         if m == "XCHG":
             size = operand_size(ops)
             a, b = ops
+            # XCHG with memory is locked on x86 whatever the prefix: a real host atomic, so a free-running guest
+            # thread (RECOMP_FREE_THREADS) and the baton holder never lose each other's write.
+            if size == 32 and (a.kind == "mem") != (b.kind == "mem"):
+                m_, r_ = (a, b) if a.kind == "mem" else (b, a)
+                L.append("uint32_t ad_ = %s;" % addr_expr(m_))
+                L.append("uint32_t t_ = atomic_xchg32(ad_, %s);" % read_op(r_, size))
+                L.append(write_op(r_, size, "t_"))
+                return L
             a = self.rmw(a, size, L)
             L.append("uint32_t t_ = %s;" % read_op(a, size))
             L.append(write_op(a, size, read_op(b, size)))
@@ -2988,10 +2999,19 @@ class Translator(object):
             return L
 
         if m == "CMPXCHG":
-            # The guest is single-threaded, so LOCK needs no host atomic.
-            # Flags come from accumulator - destination on either path.
+            # Flags come from accumulator - destination on either path. LOCK on a dword in memory is a host
+            # atomic (a free-running guest thread runs beside the baton holder); otherwise the plain sequence.
             size = operand_size(ops)
             dst, src = ops
+            if ins.rep == "LOCK" and dst.kind == "mem" and size == 32:
+                L.append("uint32_t ad_ = %s;" % addr_expr(dst))
+                L.append("uint32_t a_ = c->r[0], s_ = %s;" % read_op(src, size))
+                L.append("uint32_t b_ = atomic_cmpxchg32(ad_, a_, s_);")
+                L.append("uint64_t rf_ = (uint64_t)a_ - b_;")
+                L.append("uint32_t r_ = (uint32_t)rf_;")
+                L.append("if (a_ != b_) { c->r[0] = b_; }")
+                L.extend(self.flags_arith("sub", size, live))
+                return L
             dst = self.rmw(dst, size, L)
             L.append("uint32_t a_ = c->r[0] & %s, b_ = %s;"
                      % (hexlit(mask_of(size)), read_op(dst, size)))
@@ -3003,9 +3023,14 @@ class Translator(object):
             return L
 
         if m == "CMPXCHG8B":
-            # LOCK needs no host atomic under the cooperative guest scheduler.
             # Capture the guest address before the failure path changes EDX:EAX.
             L.append("uint32_t ad_ = %s;" % addr_expr(ops[0]))
+            if ins.rep == "LOCK":
+                L.append("uint64_t expected_ = ((uint64_t)c->r[2] << 32) | c->r[0];")
+                L.append("uint64_t dst_ = atomic_cmpxchg64(ad_, expected_, ((uint64_t)c->r[1] << 32) | c->r[3]);")
+                L.append("c->eflags_zf = (expected_ == dst_);")
+                L.append("if (!c->eflags_zf) { c->r[0] = (uint32_t)dst_; c->r[2] = (uint32_t)(dst_ >> 32); }")
+                return L
             L.append("uint64_t dst_ = rd64(ad_);")
             L.append("uint64_t expected_ = ((uint64_t)c->r[2] << 32) | c->r[0];")
             L.append("c->eflags_zf = (expected_ == dst_);")
@@ -3016,6 +3041,16 @@ class Translator(object):
         if m == "XADD":
             size = operand_size(ops)
             dst, src = ops
+            if ins.rep == "LOCK" and dst.kind == "mem" and size == 32:
+                # A host atomic: see XCHG.
+                L.append("uint32_t ad_ = %s;" % addr_expr(dst))
+                L.append("uint32_t b_ = %s;" % read_op(src, size))
+                L.append("uint32_t a_ = atomic_xadd32(ad_, b_);")
+                L.append("uint64_t rf_ = (uint64_t)a_ + b_;")
+                L.append("uint32_t r_ = (uint32_t)rf_;")
+                L.append(write_op(src, size, "a_"))
+                L.extend(self.flags_arith("add", size, live))
+                return L
             dst = self.rmw(dst, size, L)
             L.append("uint32_t a_ = %s, b_ = %s;" % (read_op(dst, size), read_op(src, size)))
             L.append("uint64_t rf_ = (uint64_t)a_ + b_;")
