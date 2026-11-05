@@ -54,6 +54,7 @@ struct Frame {
     bool screen_class_valid = true; // Evidence only; never changes composition or pacing.
     bool had_draws = false, supplied = false, gpu = false, shown = false;
     bool released = false, dropped = false, success = true, repeat = false, staged_pixels = false;
+    bool recompose = false; // from NFSMW 3.0.4: a repeat that composes again (the menu changed while the guest is parked)
     bool completion_fallback = false;
     bool hdr_scene_mask = false; // Test86: the D3D9 renderer saw the core mod's pre-HUD scene marker
     double presented_ts = 0, gpu_ts = 0, submitted_ts = 0, sealed_ts = 0, gpu_ms = 0;

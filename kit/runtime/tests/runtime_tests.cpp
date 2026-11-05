@@ -13,6 +13,7 @@
 #include "../discovery.h"
 #include "../memory.h"
 #include "../win32.h"
+#include "../guest_pause.h"
 #include "../../platform/os.h"
 #include "game_config.h"
 
@@ -25,6 +26,7 @@
 #include <map>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cctype>
 #include <set>
 #include <string>
@@ -1724,6 +1726,98 @@ static void test_midi(X86 *c) {
 // "monotonic" about a pinned run makes two incomparable runs look comparable,
 // and installing a time source is not the same as pinning one - the boot hosts
 // install a source that reads the real clock.
+// NFSMW 3.0.4 (D-202 item 4, runtime/guest_pause.h): the settings menu pausing the game. The guest clock hold stops
+// GetTickCount, timeGetTime and the microsecond counter and lets them carry on from there; it never steps back, a
+// pinned clock is never held, and the park loop holds, parks, releases and logs in that order.
+static void test_guest_pause(X86 *c) {
+    section("guest pause: clock hold and the park loop");
+    host_clear_time_source();
+    const auto ms = [](int n) { std::this_thread::sleep_for(std::chrono::milliseconds(n)); };
+    const uint32_t before = host_millis();
+    host_guest_clock_hold(true);
+    check(host_guest_clock_held(), "the hold is on");
+    const uint32_t frozen = host_millis();
+    const uint32_t tick0 = call_import(c, "KERNEL32.dll", "GetTickCount", {});
+    const uint32_t tgt0 = call_import(c, "WINMM.dll", "timeGetTime", {});
+    const uint64_t us0 = host_guest_clock_us(os_monotonic_ns() / 1000ull);
+    ms(300);
+    const uint32_t tick1 = call_import(c, "KERNEL32.dll", "GetTickCount", {});
+    const uint32_t tgt1 = call_import(c, "WINMM.dll", "timeGetTime", {});
+    const uint64_t us1 = host_guest_clock_us(os_monotonic_ns() / 1000ull);
+    check(host_millis() - frozen < 2, "300 ms held: the clock stood still (%u ms)", host_millis() - frozen);
+    check(tick1 - tick0 < 2 && tgt1 - tgt0 < 2, "GetTickCount (%u) and timeGetTime (%u) stood still", tick1 - tick0,
+          tgt1 - tgt0);
+    check(us1 - us0 < 2000, "the microsecond counter stood still (%llu us)", (unsigned long long)(us1 - us0));
+    host_guest_clock_hold(false);
+    const uint32_t after = host_millis();
+    check(!host_guest_clock_held() && after - frozen < 5, "released, it carries on from where it stopped (+%u ms)",
+          after - frozen);
+    check(frozen - before < 50, "and the hold began where the clock was (+%u ms)", frozen - before);
+    ms(60);
+    check(host_millis() - after >= 50, "then it runs again (+%u ms in 60)", host_millis() - after);
+    // Control: the same wait without a hold shows on the clock.
+    const uint32_t r0 = host_millis();
+    ms(300);
+    check(host_millis() - r0 >= 250, "control: 300 ms unheld show (%u ms)", host_millis() - r0);
+    // Never a step back, with readers on other threads while the hold goes on and off.
+    std::atomic<bool> stop{false}, backwards{false};
+    std::thread reader([&] {
+        uint32_t last = host_millis();
+        while (!stop.load()) {
+            const uint32_t now = host_millis();
+            if ((int32_t)(now - last) < 0)
+                backwards.store(true);
+            last = now;
+        }
+    });
+    for (int i = 0; i < 40; ++i) {
+        host_guest_clock_hold(true);
+        ms(2);
+        host_guest_clock_hold(false);
+        ms(1);
+    }
+    stop.store(true);
+    reader.join();
+    check(!backwards.load(), "40 holds with a reader running: the clock never went back");
+    // A pinned clock is its owner's: never held.
+    host_set_time_source_pinned(1000, 50);
+    host_guest_clock_hold(true);
+    check(!host_guest_clock_held(), "a pinned clock is not held");
+    host_pinned_clock_advance();
+    check(host_millis() == 1050u, "and still steps (%u)", host_millis());
+    host_clear_time_source();
+    check(!host_guest_clock_held(), "clearing the clock leaves no hold behind");
+
+    // The park loop with fakes: nothing when not wanted; else hold, log, slices while wanted, release, log.
+    struct Fake {
+        int wanted_for = 0, slices = 0;
+        double t = 10.0;
+        std::string ev;
+    } f;
+    GuestPauseOps o;
+    o.ctx = &f;
+    o.wanted = [](void *p) { return static_cast<Fake *>(p)->wanted_for > 0; };
+    o.hold = [](void *p, bool on) { static_cast<Fake *>(p)->ev += on ? "H" : "h"; };
+    o.slice = [](void *p) {
+        Fake &x = *static_cast<Fake *>(p);
+        ++x.slices;
+        --x.wanted_for;
+        x.t += 0.016;
+        x.ev += "s";
+    };
+    o.now = [](void *p) { return static_cast<Fake *>(p)->t; };
+    o.log = [](void *p, bool paused, double) { static_cast<Fake *>(p)->ev += paused ? "P" : "R"; };
+    check(guest_pause_run(o) == 0.0 && f.ev.empty(), "not wanted: no hold, no log, no slice (\"%s\")", f.ev.c_str());
+    f.wanted_for = 3;
+    const double parked = guest_pause_run(o);
+    check(f.ev == "HPssshR" && f.slices == 3, "wanted for 3 slices: \"%s\" (hold, log, 3 slices, release, log)",
+          f.ev.c_str());
+    check(parked > 0.047 && parked < 0.049, "the seconds parked are the slices' (%.3f)", parked);
+    // Without the mods module (this suite) the menu never wants a pause: the real park point returns at once.
+    host_guest_pause_point();
+    check(!host_guest_clock_held(), "the park point with no menu: no hold");
+}
+
 static void test_pinned_clock(X86 *c) {
     section("pinned clock");
     (void)c;
@@ -7147,6 +7241,7 @@ int main(int argc, char **argv) {
     test_files(c);
     test_version_resource(c);
     test_pinned_clock(c);
+    test_guest_pause(c);
     test_cadence_trace(c);
     test_misc_shims(c);
     test_windows_version(c);

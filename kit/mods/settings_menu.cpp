@@ -4,6 +4,7 @@
 #include "display_settings.h"
 #include "game_config.h"
 #include "mods_internal.h"
+#include "../runtime/mods_seam.h"
 
 #include <algorithm>
 #include <atomic>
@@ -445,9 +446,21 @@ void adjust(const Item &it, int delta, bool from_enter) {
     }
 }
 
+#ifdef POPM_TESTING
+double g_test_seconds = -1;   // mods_menu_clock_for_test: a set clock for the watchdog tests
+int g_test_pause_setting = -1;
+#endif
 double menu_seconds() {
+#ifdef POPM_TESTING
+    if (g_test_seconds >= 0)
+        return g_test_seconds;
+#endif
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
+// NFSMW 3.0.4 (D-202 item 4, runtime/guest_pause.h): when the current pause began (0: not paused). The Apply
+// watchdog below counts only time the game ran: it does not fire during a pause, and a pause moves the Apply's
+// time forward by the paused part, so 20 s of running still prove it.
+double g_paused_since = 0;
 // Test85: last-known-good. When the Apply that recorded them happened (0: none pending).
 double g_pending_since = 0;
 void record_previous() {
@@ -641,6 +654,27 @@ bool mods_menu_is_open() {
     return g_open;
 }
 
+extern "C" bool mods_menu_pause_wanted(void) {
+    if (!mods_host_on_main_thread() || !mods_menu_is_open())
+        return false;
+#ifdef POPM_TESTING
+    if (g_test_pause_setting >= 0)
+        return g_test_pause_setting != 0;
+#endif
+    return mods_core_setting("pause_in_menu", 0) != 0;
+}
+
+extern "C" void mods_menu_note_pause(bool paused) {
+    const double now = menu_seconds();
+    if (paused) {
+        g_paused_since = now > 0 ? now : 1e-9;
+        return;
+    }
+    if (g_pending_since > 0 && g_paused_since > 0)
+        g_pending_since += now - std::max(g_pending_since, g_paused_since);
+    g_paused_since = 0;
+}
+
 int mods_menu_pending_count() {
     std::lock_guard lock(g_mu);
     return int(g_draft.size());
@@ -794,7 +828,7 @@ void mods_menu_main_thread_call(std::function<void()> fn) {
 
 void mods_menu_main_thread_drain() {
     // Test85: 20 s of game frames after an Apply prove it; the recorded previous values are dropped.
-    if (g_pending_since > 0 && menu_seconds() - g_pending_since > 20.0) {
+    if (g_pending_since > 0 && g_paused_since == 0 && menu_seconds() - g_pending_since > 20.0) {
         g_pending_since = 0;
         mods_settings_clear_pending();
         fflush(stdout);
@@ -818,7 +852,19 @@ void mods_menu_main_thread_drain() {
 void mods_menu_enable_for_test(bool on) {
     g_force_enabled = on;
 }
+void mods_menu_clock_for_test(double seconds) {
+    g_test_seconds = seconds;
+}
+void mods_menu_pause_setting_for_test(int on) {
+    g_test_pause_setting = on;
+}
+double mods_menu_pending_since_for_test() {
+    return g_pending_since;
+}
 void mods_menu_reset_for_test() {
+    g_paused_since = 0;
+    g_test_seconds = -1;
+    g_test_pause_setting = -1;
     std::lock_guard lock(g_mu);
     g_open = false;
     g_tab = 0;

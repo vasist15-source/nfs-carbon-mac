@@ -189,6 +189,11 @@ def load(game_dir):
     fk = settings.setdefault("filtering_key", "texture_filtering")
     if not isinstance(fk, str) or not fk.replace("_", "").isalnum():
         raise ValueError("%s: [settings] filtering_key must be a plain name, not %r" % (source, fk))
+    # From NFSMW 3.0.4: the game's core mod, whose settings the host reads for its own features (the menu's
+    # pause_in_menu): "<mod>/<key>". "" = none, the features keep their defaults.
+    core_mod = settings.setdefault("core_mod", "")
+    if not isinstance(core_mod, str) or (core_mod and not re.fullmatch(r"[a-z0-9_]+(\.[a-z0-9_]+)*", core_mod)):
+        raise ValueError("%s: [settings] core_mod must be a mod id like core.game, not %r" % (source, core_mod))
     # The settings page's form: "list", the original single page, or "tabs", the Graphics / Mods /
     # Controls menu with an Apply/Discard draft for renderer changes.
     page = settings.setdefault("page", "list")

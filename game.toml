@@ -295,6 +295,8 @@ rows = ["window", "frame_limit", "performance_overlay", "filtering"]
 # mods' choices by name. The kit's "controls" rows are the iPad/iPhone touch
 # controls and stay off on the Mac; the controller settings are core.nfsc's.
 page = "tabs"
+# The core mod whose settings the kit reads for its own features (pause_in_menu: F10 pauses the game).
+core_mod = "core.nfsc"
 # A 3D game: fill the screen at any resolution (the kit's default "integer"
 # scales by whole multiples only, so most sizes left black borders).
 scaling = "smooth"

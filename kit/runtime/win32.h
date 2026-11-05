@@ -273,6 +273,18 @@ void sched_run_checkpoint();
 // ---------------------------------------------------------------------------
 uint32_t host_millis();
 void host_set_time_source(uint32_t (*fn)());
+// NFSMW 3.0.4 (D-202 item 4, guest_pause.h): the settings menu pausing the game. The guest clock hold stops
+// host_millis() (so GetTickCount, timeGetTime, QueryPerformanceCounter and the multimedia timers) where it is and
+// lets it carry on from there on release; a pinned clock is never held. host_guest_clock_us maps the monotonic
+// clock in microseconds to the same held time (QueryPerformanceCounter's microsecond form).
+void host_guest_clock_hold(bool on);
+bool host_guest_clock_held();
+uint64_t host_guest_clock_us(uint64_t mono_us);
+// The park point, called by Present after each frame: parks the main guest thread while the menu wants the game
+// paused. The host gives it its mixer pause, and cancels it for good when the game is asked to close.
+void host_guest_pause_point();
+void host_guest_pause_set_audio(void (*fn)(bool paused));
+void host_guest_pause_cancel();
 // What that clock IS, in the host's own words, for whatever has to record what
 // a run ran on. Installing a time source is not the same as pinning one - the
 // boot hosts install one that reads the real clock - so this cannot be derived

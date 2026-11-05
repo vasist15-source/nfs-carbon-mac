@@ -739,6 +739,8 @@ void Dev_Present(X86 *c) {
                 p.states_changed();
             }
         }
+        // From NFSMW 3.0.4: the settings menu pauses the game here, between two frames (runtime/guest_pause.h).
+        host_guest_pause_point();
         com_ret(c, D3D_OK9);
         return;
     }

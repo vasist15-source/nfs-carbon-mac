@@ -9,6 +9,8 @@
 #include "win32.h"
 #include "loader.h"
 #include "resources.h"
+#include "guest_pause.h"
+#include "mods_seam.h"
 #include <algorithm>
 
 #include <stdio.h>
@@ -38,15 +40,129 @@ uint64_t now_us() {
 }
 } // namespace
 
-uint32_t host_millis() {
+namespace {
+uint32_t raw_host_millis() {
     if (g_time_source)
         return g_time_source();
     if (!g_epoch_us)
         g_epoch_us = now_us();
     return (uint32_t)((now_us() - g_epoch_us) / 1000ull);
 }
+
+// NFSMW 3.0.4 (D-202 item 4, guest_pause.h): the guest clock hold. While held, host_millis() reads the value it had
+// when the hold began; on release the held span becomes an offset, so the clock carries on from where it stopped.
+// One writer (the main guest thread at its pause point, under g_hold_m); readers on every guest thread take no lock.
+// A reader can pair a clock read from just before a release with the new offset, so once a hold has happened every
+// reading is kept from going back (g_hold_last): a game's unsigned "now - then" must never see a step backwards.
+// Nothing here runs until the first hold, and a pinned clock is never held (it is its owner's).
+std::mutex g_hold_m;
+std::atomic<bool> g_hold_ever{false}, g_held{false};
+std::atomic<uint32_t> g_hold_frozen{0}, g_hold_raw{0}, g_hold_off{0}, g_hold_last{0};
+std::atomic<uint64_t> g_hold_mono_us{0}, g_hold_off_us{0};
+
+void hold_reset() {
+    std::lock_guard<std::mutex> l(g_hold_m);
+    g_held.store(false);
+    g_hold_ever.store(false);
+    g_hold_frozen.store(0);
+    g_hold_raw.store(0);
+    g_hold_off.store(0);
+    g_hold_last.store(0);
+    g_hold_mono_us.store(0);
+    g_hold_off_us.store(0);
+}
+} // namespace
+
+uint32_t host_millis() {
+    const uint32_t raw = raw_host_millis();   // always read: a boot host's source services the host on a new ms
+    if (!g_hold_ever.load(std::memory_order_acquire) || host_time_source_is_pinned())
+        return raw;
+    const uint32_t t = g_held.load(std::memory_order_acquire) ? g_hold_frozen.load(std::memory_order_relaxed)
+                                                              : raw - g_hold_off.load(std::memory_order_relaxed);
+    uint32_t last = g_hold_last.load(std::memory_order_relaxed);
+    while ((int32_t)(t - last) > 0 && !g_hold_last.compare_exchange_weak(last, t, std::memory_order_relaxed))
+        ;
+    return (int32_t)(t - last) > 0 ? t : last;
+}
 void host_set_time_source(uint32_t (*fn)()) {
     g_time_source = fn;
+    hold_reset();   // a new clock: the old one's held span means nothing to it
+}
+
+void host_guest_clock_hold(bool on) {
+    if (host_time_source_is_pinned())
+        return;
+    std::lock_guard<std::mutex> l(g_hold_m);
+    if (on == g_held.load())
+        return;
+    const uint32_t raw = raw_host_millis();
+    const uint64_t mono_us = os_monotonic_ns() / 1000ull;
+    if (on) {
+        g_hold_raw.store(raw);
+        g_hold_mono_us.store(mono_us);
+        g_hold_frozen.store(raw - g_hold_off.load());
+        g_hold_ever.store(true, std::memory_order_release);
+        g_held.store(true, std::memory_order_release);
+    } else {
+        g_hold_off.store(g_hold_off.load() + (raw - g_hold_raw.load()));
+        g_hold_off_us.store(g_hold_off_us.load() + (mono_us - g_hold_mono_us.load()));
+        g_held.store(false, std::memory_order_release);
+    }
+}
+bool host_guest_clock_held() {
+    return g_held.load(std::memory_order_acquire);
+}
+uint64_t host_guest_clock_us(uint64_t mono_us) {
+    if (!g_hold_ever.load(std::memory_order_acquire))
+        return mono_us;
+    if (g_held.load(std::memory_order_acquire))
+        mono_us = std::min(mono_us, g_hold_mono_us.load(std::memory_order_relaxed));
+    return mono_us - g_hold_off_us.load(std::memory_order_relaxed);
+}
+
+// The park point (guest_pause.h): Present calls it once per frame on whatever thread presents; the menu's answer is
+// "no" off the main thread, so only the main guest thread parks.
+// Run 39: the presenter redraws a changed menu over the held frame (host/present_thread.cpp; weak no-op below).
+extern "C" void host_present_menu_refresh(void);
+namespace {
+std::atomic<bool> g_pause_closed{false};
+std::atomic<void (*)(bool)> g_pause_audio{nullptr};
+} // namespace
+void host_guest_pause_set_audio(void (*fn)(bool paused)) {
+    g_pause_audio.store(fn);
+}
+void host_guest_pause_cancel() {
+    g_pause_closed.store(true);
+}
+void host_guest_pause_point() {
+    if (g_pause_closed.load(std::memory_order_relaxed) || !mods_menu_pause_wanted())
+        return;
+    GuestPauseOps o;
+    o.wanted = [](void *) { return !g_pause_closed.load() && mods_menu_pause_wanted(); };
+    o.hold = [](void *, bool on) {
+        host_guest_clock_hold(on);
+        if (void (*audio)(bool) = g_pause_audio.load())
+            audio(on);
+        mods_menu_note_pause(on);
+    };
+    // The sleep gives up the baton and its checkpoint drains the menu's deferred Apply calls; the clock read is the
+    // host's heartbeat (a boot host services its window and applies queued input on it), so menu keys arrive. Run 39:
+    // then the menu is redrawn over the held frame when those keys changed it (nothing is sealed while parked, so
+    // without this the menu froze on screen).
+    o.slice = [](void *) {
+        guest_sleep_ms(16);
+        (void)host_millis();
+        host_present_menu_refresh();
+    };
+    o.now = [](void *) { return (double)os_monotonic_ns() / 1e9; };
+    o.log = [](void *, bool paused, double seconds) {
+        if (paused)
+            printf("mods: settings menu paused the game\n");
+        else
+            printf("mods: settings menu resumed the game after %.1f s (guest clock held)\n", seconds);
+        fflush(stdout);
+    };
+    guest_pause_run(o);
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +208,7 @@ void host_clear_time_source() {
     g_pin_step = 0;
     g_time_source = nullptr;
     g_clock_desc = nullptr; // back to "monotonic"
+    hold_reset();
 }
 
 bool host_time_source_is_pinned() {
@@ -2000,6 +2117,8 @@ std::string win32_midi_soundfont_path() {
 // nothing, which is what the shims above already report.
 // ---------------------------------------------------------------------------
 extern "C" {
+// From NFSMW 3.0.4: a host without the presentation thread has no menu picture to refresh.
+__attribute__((weak)) void host_present_menu_refresh(void) {}
 __attribute__((weak)) int host_midi_open(const char *) {
     return 0;
 }

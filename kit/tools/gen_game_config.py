@@ -85,6 +85,7 @@ def render_header(cfg):
     lines.append("#define RECOMP_SETTINGS_FILTERING_DEFAULT %d" % cfg["settings"]["filtering_default"])
     lines.append("#define RECOMP_SETTINGS_FILTERING_KEY %s" % c_string(cfg["settings"]["filtering_key"]))
     lines.append("#define RECOMP_SETTINGS_PAGE_TABS %d" % (cfg["settings"]["page"] == "tabs"))
+    lines.append("#define RECOMP_SETTINGS_CORE_MOD %s" % c_string(cfg["settings"]["core_mod"]))
     lines.append("#define RECOMP_SMOOTH_SCALING %d" % (cfg["settings"]["scaling"] == "smooth"))
     # The launcher's data: what to call the game, where to get it, where an
     # install may be, and what an import copies (host/launcher/).

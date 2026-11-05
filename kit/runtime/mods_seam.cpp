@@ -1,3 +1,5 @@
+#include "game_config.h"
+#include <stdio.h>
 #include <atomic>
 #include "../mods/pop_mod_api.h"
 // mods_seam.cpp - the weak defaults. Each one is what an unmodded build does.
@@ -8,9 +10,27 @@
 extern "C" {
 
 __attribute__((weak)) void mods_present_level_end(void) {}
+// From NFSMW 3.0.4: without the mods module there is no settings menu to pause the game for.
+__attribute__((weak)) bool mods_menu_pause_wanted(void) {
+    return false;
+}
+__attribute__((weak)) void mods_menu_note_pause(bool) {}
 // Test86: without the mods module there are no settings.
 __attribute__((weak)) int64_t mods_setting_value(const char *, int64_t fallback) {
     return fallback;
+}
+// From NFSMW 3.0.4: a setting of the game's core mod (game.toml [settings] core_mod) by its key alone.
+#ifndef RECOMP_SETTINGS_CORE_MOD
+#define RECOMP_SETTINGS_CORE_MOD ""
+#endif
+int64_t mods_core_setting(const char *key, int64_t fallback) {
+    static const char kCore[] = RECOMP_SETTINGS_CORE_MOD;
+    if (!kCore[0] || !key || !*key)
+        return fallback;
+    char full[128];
+    if (snprintf(full, sizeof full, "%s/%s", kCore, key) >= (int)sizeof full)
+        return fallback;
+    return mods_setting_value(full, fallback);
 }
 // A host with no display reports none.
 __attribute__((weak)) int host_display_screen_size(int *, int *) {

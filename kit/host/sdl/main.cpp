@@ -2211,6 +2211,10 @@ int main(int argc, char **argv) {
            window_focused() ? "yes" : "no");
     fflush(stdout);
 
+    // NFSMW 3.0.4 (D-202 item 4): the settings menu's pause stops the mixer too (the play cursors stand still, so
+    // the game's streams wait and carry on where they were).
+    host_guest_pause_set_audio(host_audio_pause);
+
     BootOptions options;
     options.name = "windowed";
     options.exe = exe.c_str();

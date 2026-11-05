@@ -8670,6 +8670,79 @@ extern "C" void mods_page_draw(void *pixels, int w, int h, int bpp, int pitch,
         p[(size_t)y * (size_t)pitch] = 0xab;
 }
 
+// Run 39 (NFSMW 3.0.4): the tabbed menu's renderer, weak in mods_seam.cpp (0 = hidden). Visible, it draws when its
+// generation moved since the caller's (2) and otherwise says unchanged (1), as mods_menu_render does.
+static bool g_menu_visible = false;
+static uint64_t g_menu_gen = 0;
+extern "C" int mods_menu_render(int w, int h, uint64_t *generation, const uint8_t **pixels) {
+    if (!g_menu_visible)
+        return 0;
+    if (*generation == g_menu_gen)
+        return 1;
+    static std::vector<uint8_t> page;
+    page.assign((size_t)w * (size_t)h * 4, 0x40);
+    *generation = g_menu_gen;
+    *pixels = page.data();
+    return 2;
+}
+
+// Run 39 (NFSMW 3.0.4, D-202 item 4): while the menu has the guest parked nothing is sealed, so the menu froze on
+// screen. host_present_menu_refresh, from the park loop, redraws a changed page and the next repeat composes it over
+// the held frame: no new frame id. Controls: an unchanged page and a hidden one cost nothing and recompose nothing.
+static void test_menu_redrawn_while_parked() {
+    host_page_set_enabled(true);
+    g_menu_visible = true;
+    g_menu_gen = 1;
+    host_present_test_begin();
+    host_present_acquire_target(640, 480, 640, 480);
+    host_present_test_seal(1);
+    host_present_tick_for_test(0.01);
+    host_present_test_command_done(1);
+    host_present_test_presented(1, 0.02);
+    CHECK_EQ(host_present_unique_completed(), 1u);
+    const uint64_t pages = host_present_settings_pages();   // the test seal path attaches no page
+    // A repeat is in flight (made before the menu changed), as nearly always in the real app.
+    host_present_tick_for_test(0.025);
+    CHECK_EQ(host_present_repeats(), 1u);
+    const uint64_t old_page = host_present_test_page_id();
+    // Parked: the cursor moved (a new generation) and no frame is sealed.
+    g_menu_gen = 2;
+    host_present_menu_refresh();
+    CHECK_EQ(host_present_menu_refreshes(), 1u);
+    CHECK_EQ(host_present_settings_pages(), pages + 1);
+    const uint64_t new_page = host_present_test_page_id();
+    CHECK(new_page != old_page);
+    // That repeat retires after the refresh: it must not put its older page back (the real-app freeze).
+    host_present_test_command_done(1);
+    host_present_test_presented(1, 0.028);
+    CHECK_EQ(host_present_test_page_id(), new_page);
+    host_present_tick_for_test(0.03);
+    CHECK_EQ(host_present_repeats(), 2u);
+    CHECK_EQ(host_present_test_recomposed(), 1u);  // the repeat composes the new page
+    CHECK_EQ(host_present_test_last_id(), 1u);     // the held frame: no new id
+    host_present_test_command_done(1);
+    host_present_test_presented(1, 0.04);
+    CHECK_EQ(host_present_unique_completed(), 1u);
+    CHECK_EQ(host_present_test_page_id(), new_page);
+    // Control: nothing changed on the page: no texture, the next repeat reuses the composition.
+    host_present_menu_refresh();
+    CHECK_EQ(host_present_menu_refreshes(), 1u);
+    host_present_tick_for_test(0.05);
+    CHECK_EQ(host_present_repeats(), 3u);
+    CHECK_EQ(host_present_test_recomposed(), 1u);
+    host_present_test_command_done(1);
+    host_present_test_presented(1, 0.06);
+    // Control: the menu closed: nothing drawn.
+    g_menu_visible = false;
+    g_menu_gen = 3;
+    host_present_menu_refresh();
+    CHECK_EQ(host_present_menu_refreshes(), 1u);
+    host_present_stop();
+    host_present_menu_refresh();                   // no presenter: a no-op
+    host_page_set_enabled(false);
+    g_menu_gen = 0;
+}
+
 static void test_page_draws_on_a_copy() {
     host_page_set_enabled(true);
     const int w = 64, h = 32, pitch = 80; // a padded stride, as a lock gives
@@ -11565,6 +11638,7 @@ int main(int argc, char **argv) {
         {"entity completed present freshness", test_entity_completed_present_freshness},
         {"drain wanted", test_drain_wanted},
         {"run unfinished", test_run_unfinished},
+        {"menu redrawn while parked", test_menu_redrawn_while_parked},
         {"page draws on a copy", test_page_draws_on_a_copy},
         {"pointer capture", test_pointer_capture},
         {"T9 hits and drag", test_t9_hits_and_drag},

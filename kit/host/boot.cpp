@@ -713,6 +713,7 @@ void boot_request_close(const char *reason) {
         return;
     g_close_posted = true;
     g_close_time = now_seconds();
+    host_guest_pause_cancel();   // 3.0.4: a game parked under the settings menu must run to act on the close
     if (reason)
         g_stop_reason = reason;
     // The caller says why in its own words; boot only delivers the message,
