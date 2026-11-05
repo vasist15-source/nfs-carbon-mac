@@ -2,7 +2,9 @@
 
 Port of Need for Speed: Carbon (PC v1.4, unwrapped NFSC.exe) to macOS using
 veritr1x's recomp-kit, taken from the NFS Most Wanted Mac port
-(github.com/elforeign/nfs-most-wanted-mac, local clone ~/nfs-most-wanted-mac).
+(github.com/elforeign/nfs-most-wanted-mac; no local clone any more). Our kit = MW 1.0.3's kit. MW 2.0-3.0.4
+(branch legacy-3.x, 2026-10-10..16) kept changing that kit; MW 4.x (2026-10-27+) is a NEW MW-only runtime, not the
+kit (ideas only: video clips, Update now, GitHub problem reports).
 The kit's copy lives in `kit/` with our changes on top. Developed on macOS 27, Apple Silicon.
 Explain findings plainly and keep commands copy-pasteable.
 
@@ -81,6 +83,10 @@ Explain findings plainly and keep commands copy-pasteable.
   00750df4 (slot = ((320+offset)/320-1.042)/-2, fPiPUCAPPosition). FE scaling (FEScaleHook1/2 at
   00730e4d/00730ece), loading-screen pillarboxes, rain droplets, autosculpt/arrest blur,
   options resolution list. `tools/find_pattern.py` finds the fix's byte patterns.
+- Rumble: mods/core/nfsc/rumble.h (from MW's impact_feedback) hooks the game's FFB functions (impacts 00734cd0,
+  road surface 00735270) and drives the pad motors; settings impact_rumble / surface_rumble / rumble_floor.
+  So MW 3.0.4's DirectInput force feedback (dinput_effect.cpp, RECOMP_DINPUT_FF) was NOT ported: it would
+  make Carbon create the same effects a second time (it already calls SetProperty 9 / SendForceFeedbackCommand).
 - Background pause/mute: the game already does it (user-confirmed 2026-10-10: music
   pauses on Cmd-Tab) via WM_ACTIVATE/WM_ACTIVATEAPP the host posts (WndProc 00712060:
   007120ab -> 0050c370; 007121d5 -> 0081e6a0). A host-side pause was tried and reverted.
@@ -446,6 +452,21 @@ Explain findings plainly and keep commands copy-pasteable.
    scale -> colour key -> encode (simple bounding-box DXT encoder). Source is the
    surface's CPU copy. Callers: 007d7580 (texture copy when formats differ),
    00759040 (per mip), 00732ca0 (boot).
+Ported from MW legacy-3.x on 2026-11-05 (kit tests pass apart from failures that were already there; NOT yet run in the game):
+22. Scheduler lock (07cc255, MW 2.0.1): handle table inserts/erases and thread_spawn take g_sched_m; fault log
+   prints host pc/lr + image load (atos). runtime_tests --sched-race.
+23. Heap guards + kit span (b07c98e, MW 3.0.2-3.0.4, issue 8): 16 KB 0xfd gaps around DirectSound rings and guest
+   thread stacks ("heap guard: ... written outside its span" in the log = a stray write caught), top 32 MB of the
+   extra heap (..0x80000000) only for kit objects; first 48 guest blocks >= 256 KB logged with EIP. Off switches
+   RECOMP_HEAP_GUARD=0 / RECOMP_KIT_SPAN=0; read-only sound views opt-in RECOMP_READONLY_PAGES=1.
+24. Refresh-slot pacing + 120 Hz (c245c92, MW 3.0.2/3.0.3): Dev_Present follows the presenter's refresh slots
+   when limit == refresh (SlotPacer; RECOMP_PRESENT_OWN_CLOCK=1 = old); "d3d9: frame pacing, last 60 s" log line;
+   presenter period from NSScreen.maximumFramesPerSecond of the window's screen (host/sdl/os_display_macos.mm).
+25. F10 menu pauses the game (8fa8f63, MW 3.0.4): core.nfsc pause_in_menu (default on); Dev_Present parks the
+   main guest thread, host_millis held, mixer paused; game.toml [settings] core_mod = "core.nfsc"; parked menu
+   redraw publishes to the glass views. Log: "mods: settings menu paused the game" / "resumed ... after N s".
+   Not yet ported from 3.0.4: Check for updates (kit/host/update_check.cpp), Save bug report, thread start
+   captured at CreateThread (kernel32), mute in background, deadzones.
 21. MetalFX upscaling (git, 2026-10-31; CONFIRMED running by the user's log 2026-10-31: "gpu: MetalFX spatial
    upscaling 1920x1080 -> 3420x1924", 5907 frames, no new faults): gpu::Device::spatial_upscale (default false;
    metal_device.mm: MTLFXSpatialScaler, perceptual colour, cached per in/out size + format, needs
