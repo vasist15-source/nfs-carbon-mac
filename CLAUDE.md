@@ -452,7 +452,9 @@ Explain findings plainly and keep commands copy-pasteable.
    scale -> colour key -> encode (simple bounding-box DXT encoder). Source is the
    surface's CPU copy. Callers: 007d7580 (texture copy when formats differ),
    00759040 (per mip), 00732ca0 (boot).
-Ported from MW legacy-3.x on 2026-11-05 (kit tests pass apart from failures that were already there; NOT yet run in the game):
+Ported from MW legacy-3.x on 2026-11-05 (kit tests pass apart from failures that were already there). First game run
+(log 20261105-221307, 25 min, clean exit): F10 paused 15.6 s and 1.3 s with 3 settings applied while paused; pacing
+60.00 fps most minutes, 1 drop in 89k frames; no heap guard hits; sound objects in the kit span (0x7e1...):
 22. Scheduler lock (07cc255, MW 2.0.1): handle table inserts/erases and thread_spawn take g_sched_m; fault log
    prints host pc/lr + image load (atos). runtime_tests --sched-race.
 23. Heap guards + kit span (b07c98e, MW 3.0.2-3.0.4, issue 8): 16 KB 0xfd gaps around DirectSound rings and guest
