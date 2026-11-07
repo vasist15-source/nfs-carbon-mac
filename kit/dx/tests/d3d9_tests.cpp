@@ -639,6 +639,45 @@ static void test_surface_container_refs(uint32_t dev) {
     CHECK(com_get(tex_id) == nullptr);
 }
 
+// D3DXLoadSurfaceFromSurface into DXT1 keeps 1-bit alpha as D3DX does: a pixel under half alpha is the block's
+// transparent colour. NFSC draws a car's vinyls into an A8R8G8B8 skin, transparent where there is no vinyl, and
+// copies it into DXT1 (007d7580 -> 00732ca0); opaque blocks turned the paint under a vinyl black.
+// Blocks: all transparent, all opaque red, and transparent on the left half / opaque blue on the right half.
+static void test_dxt1_alpha_copy(uint32_t dev) {
+    const uint32_t texp = sc(0x9a0), dxtp = sc(0x9a4), ssp = sc(0x9a8), dsp = sc(0x9ac), lr = sc(0x9b0);
+    CHECK(call_method(dev, 23, {12, 4, 1, 0, 21 /* A8R8G8B8 */, 1 /* MANAGED */, texp, 0}) == 0); // CreateTexture
+    CHECK(call_method(dev, 23, {12, 4, 1, 0, 0x31545844u /* DXT1 */, 1, dxtp, 0}) == 0);
+    const uint32_t tex = rd32(texp), dxt = rd32(dxtp);
+    auto want_clear = [](uint32_t x) { return x < 4 || (x >= 8 && x < 10); };
+    CHECK(call_method(tex, 19, {0, lr, 0, 0}) == 0); // LockRect
+    const uint32_t pitch = rd32(lr), bits = rd32(lr + 4);
+    for (uint32_t y = 0; y < 4; ++y)
+        for (uint32_t x = 0; x < 12; ++x)
+            wr32(bits + y * pitch + x * 4, want_clear(x) ? 0u : x < 8 ? 0xffff0000u : 0xff0000ffu);
+    CHECK(call_method(tex, 20, {0}) == 0); // UnlockRect
+    CHECK(call_method(tex, 18, {0, ssp}) == 0); // GetSurfaceLevel
+    CHECK(call_method(dxt, 18, {0, dsp}) == 0);
+    const uint32_t ss = rd32(ssp), ds = rd32(dsp);
+    CHECK(call_shim(tramp("d3dx9_26.dll", "D3DXLoadSurfaceFromSurface"),
+                    {ds, 0, 0, ss, 0, 0, 1 /* D3DX_FILTER_NONE */, 0}) == 0);
+    CHECK(call_method(dxt, 19, {0, lr, 0, 0x10 /* READONLY */}) == 0);
+    const uint32_t blocks = rd32(lr + 4);
+    for (uint32_t bx = 0; bx < 3; ++bx) {
+        const uint32_t ends = rd32(blocks + bx * 8), idx = rd32(blocks + bx * 8 + 4);
+        const uint32_t c0 = ends & 0xffff, c1 = ends >> 16;
+        for (uint32_t k = 0; k < 16; ++k) {
+            const uint32_t i = idx >> (2 * k) & 3, x = bx * 4 + k % 4;
+            const bool clear = c0 <= c1 && i == 3; // 3-colour mode's transparent index
+            CHECK(clear == want_clear(x));
+            if (!clear && i < 2)
+                CHECK((i == 0 ? c0 : c1) == (x < 8 ? 0xf800u : 0x001fu)); // red / blue as R5G6B5
+        }
+    }
+    CHECK(call_method(dxt, 20, {0}) == 0);
+    for (uint32_t o : {ss, ds, tex, dxt})
+        call_method(o, 2);
+}
+
 static uint32_t make_device() {
     const uint32_t api = call_shim(tramp("d3d9.dll", "Direct3DCreate9"), {32});
     CHECK(api != 0);
@@ -833,6 +872,7 @@ int main() {
     test_draw_limits(dev);
     test_depth_stencil_get(dev);
     test_surface_container_refs(dev);
+    test_dxt1_alpha_copy(dev);
     test_effect_booleans(dev);
     test_volume(dev);
     test_state_getters_and_readback(dev);

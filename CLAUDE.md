@@ -173,14 +173,20 @@ Explain findings plainly and keep commands copy-pasteable.
 - Online menu entries: DONE in mods/core/nfsc/online.h (setting hide_online, default on): the carousel
   builder 0083c420 adds items with 005b2320; the Quick Match / Custom Match adds (return 0083c611 /
   0083c5c3) are skipped. (Old notes: main menu state 00843690, carousel actions 005a5560.)
-- Autosculpt (issue #4; CONFIRMED by the user 2026-11-07: parts reshape, vinyls work, zone line sits on the part):
+- Autosculpt (issue #4; CONFIRMED by the user 2026-11-07: parts reshape, zone line sits on the part):
   morphs = kit change 27 (PR #6, YevUA). Zone line = AS_SELECT_ANIM001 quads (texture set at 007b9cb0; per border
   segment 007d8c30 -> 007d2860/007d2990 -> 007c9150) drawn by the FE quad renderer 0071c770 with the widescreen
   menu's x scale 009e8f8c. 007c9150 projects two part vertices to pixels (0070f1f0) and turns x into menu units
   with FMUL 640.0 (007c9214, 007c925b), so the line was squeezed towards the left edge by (4/3)/aspect, Widescreen
   on or off (apply_hud sets the menu scale either way). Both redirected to slot 0xc2b41c (480*aspect), as the
   cursor at 00731665. Not this line: "Zone Border FatLine Mesh" 00596a10 = the world map's territory borders.
-  YevUA's PR also reported vinyls covering the paint opaquely; that did not show in the user's test.
+- Vinyls (issue #4's "can't change the colour"; CONFIRMED fixed by the user 2026-11-07: red paint shows around a
+  vinyl, before it went black): kit change 28. Vector vinyls (CARS\VINYLS\VINYLS.BIN, chunks 0x8003CE00, loaded by
+  007d23d0 onto the list 0xb77010) are painted on the CPU: compositor steps in 007dba00 (2/3 fill 007b2620, 4/5
+  007d09d0 and 6 007d1010 rasterize into a texture locked with 0070f740 = LockRect(0) / 0070f770 = UnlockRect, 9
+  007b2420 unlocks, 0xc 007d7580 copies the result by the target's format byte +0x2e: 0x20 copy, 0x08 palette,
+  0x22 DXT1 -> 00732ca0 D3DXLoadSurfaceFromSurface). The skin is 1024x1024 A8R8G8B8, transparent outside the
+  vinyl, into DXT1. 00752070 is the same rasterizer for crew logos (CREW_LOGO_PLAYER) and menu previews.
 - Full resolution list + Display mode (git 579ed7d, CONFIRMED by the user 2026-10-10: 1920x1080
   letterboxed correctly, no stretch; F10 (fn+F10) Window row switches modes): list =
   screen/1..4 ("(native)" on k=1) + common 4:3/16:10/16:9/21:9 sizes <= screen, sorted by
@@ -491,6 +497,12 @@ Ported from MW legacy-3.x on 2026-11-05 (kit tests pass apart from failures that
    buffer). The kit's lock is a staged copy that reached blob only at Unlock, so Metal drew the stock part.
    gpu_sync_buffer (dx/d3d9.cpp) now copies a still-locked buffer's staged copy into blob (whole buffer dirty)
    when they differ; one memcmp otherwise.
+28. DXT1 alpha in D3DXLoadSurfaceFromSurface (2026-11-07; CONFIRMED by the user: paint shows around a vinyl):
+   rgba_to_surface (dx/d3d9.cpp) wrote every DXT1 block opaque; now a block with pixels under half alpha is written
+   in 3-colour mode (index 3 transparent, endpoints from the opaque pixels), as D3DX does. The car's vinyl skin
+   (1024x1024 A8R8G8B8 -> DXT1: 63774 of 65536 blocks have transparent pixels) came out black around the vinyl.
+   Each kind of copy is logged once: "d3dx9: D3DXLoadSurfaceFromSurface WxH fmt -> WxH fmt (N DXT1 blocks with
+   transparent pixels)". d3d9_tests test_dxt1_alpha_copy (48 failures on the old encoder).
 21. MetalFX upscaling (git, 2026-10-31; CONFIRMED running by the user's log 2026-10-31: "gpu: MetalFX spatial
    upscaling 1920x1080 -> 3420x1924", 5907 frames, no new faults): gpu::Device::spatial_upscale (default false;
    metal_device.mm: MTLFXSpatialScaler, perceptual colour, cached per in/out size + format, needs

@@ -3096,19 +3096,34 @@ static void surface_to_rgba(ComObj *s, std::vector<uint8_t> &out) {
                 px_to_rgba(fmt, src + at, &out[(size_t(y) * w + x) * 4]);
         }
 }
-// Encode RGBA (w x h) into a staged copy of `d` (pitch d->pitch).
-static void rgba_to_surface(const std::vector<uint8_t> &in, ComObj *d, uint8_t *dst) {
+// Encode RGBA (w x h) into a staged copy of `d` (pitch d->pitch). Returns how
+// many DXT1 blocks kept transparent pixels.
+static uint32_t rgba_to_surface(const std::vector<uint8_t> &in, ComObj *d, uint8_t *dst) {
     const uint32_t w = d->width, h = d->height, fmt = d->rmask;
+    uint32_t clear_blocks = 0;
     if (uint32_t block = dxt_block_bytes(fmt)) {
         // Endpoints at the block's colour bounding box: plain, but never wrong
         // in kind, and these copies are textures the game already ships.
+        // DXT1 keeps 1-bit alpha the way D3DX does: a pixel under half alpha is
+        // the block's transparent colour (3-colour mode), and the endpoints come
+        // from the other pixels. NFSC draws a car's vinyls into an A8R8G8B8 skin
+        // that is transparent where there is no vinyl and copies it into a DXT1
+        // texture (007d7580 -> 00732ca0); written opaque, the paint under the
+        // vinyl came out black.
+        const bool dxt1 = block == 8;
         const uint32_t bw = std::max((w + 3) / 4, 1u), bh = std::max((h + 3) / 4, 1u);
         for (uint32_t by = 0; by < bh; ++by)
             for (uint32_t bx = 0; bx < bw; ++bx) {
                 uint8_t px[16][4], lo[4] = {255, 255, 255, 255}, hi[4] = {0, 0, 0, 0};
+                bool clear = false, opaque = false;
                 for (uint32_t k = 0; k < 16; ++k) {
                     const uint32_t x = std::min(bx * 4 + k % 4, w - 1), y = std::min(by * 4 + k / 4, h - 1);
                     memcpy(px[k], &in[(size_t(y) * w + x) * 4], 4);
+                    if (dxt1 && px[k][3] < 128) {
+                        clear = true;
+                        continue;
+                    }
+                    opaque = true;
                     for (int c = 0; c < 4; ++c) {
                         lo[c] = std::min(lo[c], px[k][c]);
                         hi[c] = std::max(hi[c], px[k][c]);
@@ -3116,6 +3131,38 @@ static void rgba_to_surface(const std::vector<uint8_t> &in, ComObj *d, uint8_t *
                 }
                 uint8_t *b = dst + size_t(by) * d->pitch + size_t(bx) * block;
                 uint8_t *cb = block == 8 ? b : b + 8;
+                if (clear) { // DXT1 3-colour mode: c0 <= c1, index 3 = transparent black
+                    ++clear_blocks;
+                    uint16_t c0 = 0, c1 = 0;
+                    if (opaque) {
+                        dxt_color_565(lo, c0);
+                        dxt_color_565(hi, c1);
+                        if (c0 > c1)
+                            std::swap(c0, c1);
+                    }
+                    uint8_t pal[3][4];
+                    unpack_565(c0, pal[0]);
+                    unpack_565(c1, pal[1]);
+                    for (int c = 0; c < 3; ++c)
+                        pal[2][c] = uint8_t((pal[0][c] + pal[1][c]) / 2);
+                    uint32_t bits = 0;
+                    for (uint32_t k = 0; k < 16; ++k) {
+                        int best = 3;
+                        if (px[k][3] >= 128) {
+                            int bestd = 1 << 30;
+                            for (int i = 0; i < 3; ++i) {
+                                int dd = 0;
+                                for (int c = 0; c < 3; ++c)
+                                    dd += (px[k][c] - pal[i][c]) * (px[k][c] - pal[i][c]);
+                                if (dd < bestd) { bestd = dd; best = i; }
+                            }
+                        }
+                        bits |= uint32_t(best) << (2 * k);
+                    }
+                    cb[0] = uint8_t(c0); cb[1] = uint8_t(c0 >> 8); cb[2] = uint8_t(c1); cb[3] = uint8_t(c1 >> 8);
+                    memcpy(cb + 4, &bits, 4);
+                    continue;
+                }
                 uint16_t c0, c1;
                 dxt_color_565(hi, c0);
                 dxt_color_565(lo, c1);
@@ -3163,12 +3210,21 @@ static void rgba_to_surface(const std::vector<uint8_t> &in, ComObj *d, uint8_t *
                         b[2 + k] = uint8_t(abits >> (8 * k));
                 }
             }
-        return;
+        return clear_blocks;
     }
     const uint32_t bpp = format_bytes(fmt);
     for (uint32_t y = 0; y < h; ++y)
         for (uint32_t x = 0; x < w; ++x)
             rgba_to_px(fmt, &in[(size_t(y) * w + x) * 4], dst + size_t(y) * d->pitch + size_t(x) * bpp);
+    return 0;
+}
+// "DXT1" for a FOURCC format, the D3DFMT number otherwise.
+static const char *surface_format_name(uint32_t fmt, char (&out)[12]) {
+    if (fmt > 0xff && fmt >> 24 >= ' ' && (fmt >> 24) < 127)
+        snprintf(out, sizeof out, "%c%c%c%c", char(fmt), char(fmt >> 8), char(fmt >> 16), char(fmt >> 24));
+    else
+        snprintf(out, sizeof out, "format %u", fmt);
+    return out;
 }
 // Returns 0 (D3D_OK) or an HRESULT.
 uint32_t d3d9_load_surface(uint32_t dst_view, uint32_t src_view, uint32_t color_key) {
@@ -3209,7 +3265,14 @@ uint32_t d3d9_load_surface(uint32_t dst_view, uint32_t src_view, uint32_t color_
                 }
             rgba.swap(scaled);
         }
-        rgba_to_surface(rgba, d, dst);
+        const uint32_t clear = rgba_to_surface(rgba, d, dst);
+        // Each kind of conversion once, so a log shows which copies a run made.
+        char key[96], sf[12], df[12];
+        snprintf(key, sizeof key, "d3dx9.loadsurface.%ux%u.%08x.%ux%u.%08x", s->width, s->height, s->rmask,
+                 d->width, d->height, d->rmask);
+        log_once(key, "d3dx9: D3DXLoadSurfaceFromSurface %ux%u %s -> %ux%u %s (%u DXT1 blocks with transparent pixels)",
+                 s->width, s->height, surface_format_name(s->rmask, sf), d->width, d->height,
+                 surface_format_name(d->rmask, df), clear);
     }
     stage_unlock(d);
     return 0;
