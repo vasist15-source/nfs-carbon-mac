@@ -1220,6 +1220,19 @@ static void gpu_sync_buffer(ComObj *b) {
         m.dirty_lo = 0;
         m.dirty_hi = (uint32_t)b->blob.size();
     }
+    // Autosculpt locks the part's vertex buffer, writes the morphed verts
+    // through the pointer it kept, and never calls Unlock. On D3D9 that
+    // pointer is the buffer. Here Lock staged a copy, so a draw that still
+    // sees the lock must upload that copy or the mesh stays at the pose
+    // from the last Unlock (the stock bumper, while the zone line moves).
+    if (b->lock_count > 0 && b->pixels && !b->blob.empty()) {
+        uint8_t *live = gm_ptr(b->pixels);
+        if (memcmp(live, b->blob.data(), b->blob.size()) != 0) {
+            memcpy(b->blob.data(), live, b->blob.size());
+            m.dirty_lo = 0;
+            m.dirty_hi = (uint32_t)b->blob.size();
+        }
+    }
     if (m.dirty_hi > m.dirty_lo && !b->blob.empty()) {
         uint32_t hi = std::min<uint32_t>(m.dirty_hi, (uint32_t)b->blob.size());
         host_d9_buffer_upload(b->id, (uint32_t)b->blob.size(), m.dirty_lo,
@@ -2435,8 +2448,9 @@ void Res_GetDevice(X86 *c) {
     com_ret(c, D3D_OK9);
 }
 
-// Lock hands the guest the storage this resource was created with. Unlock is
-// a no-op: there is nothing to upload to yet.
+// Lock hands the guest a staged copy. Unlock copies it back and marks the
+// GPU buffer dirty. A buffer still locked at draw time is uploaded from
+// that copy in gpu_sync_buffer (autosculpt never Unlock()s).
 static void buffer_lock(X86 *c) {
     ComObj *o = com_this_arg(c);
     uint32_t offset = arg(c, 1), out = arg(c, 3);
