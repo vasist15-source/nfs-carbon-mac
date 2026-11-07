@@ -65,6 +65,12 @@ operand_redirects = [
     # the widescreen menu's width (480 * aspect) in the slot, or the cursor
     # stops at x = 640 with menu still to its right.
     { at = 0x00731665, from = 0x009e9b68, to = 0x00c2b41c },  # FMUL 640.0
+    # Autosculpt zone line: 007c9150 projects two part vertices to pixels and
+    # turns x into menu units with * 640.0; the quads go to the menu renderer
+    # 0071c770, whose x scale (009e8f8c) is the widescreen menu's, so with 640
+    # the line was squeezed towards the left edge by (4/3) / aspect.
+    { at = 0x007c9214, from = 0x009e9b68, to = 0x00c2b41c },  # FMUL 640.0, point A
+    { at = 0x007c925b, from = 0x009e9b68, to = 0x00c2b41c },  # FMUL 640.0, point B
     # Resolution list (the fix's Resolution.ixx): the option's "supported" and
     # refresh-rate tables (6 entries at 00ab0658 / 00ab08d4) are read from
     # 40-entry tables core.nfsc fills. The unlisted readers 00712b85/00712c65

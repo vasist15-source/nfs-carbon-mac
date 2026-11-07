@@ -173,6 +173,14 @@ Explain findings plainly and keep commands copy-pasteable.
 - Online menu entries: DONE in mods/core/nfsc/online.h (setting hide_online, default on): the carousel
   builder 0083c420 adds items with 005b2320; the Quick Match / Custom Match adds (return 0083c611 /
   0083c5c3) are skipped. (Old notes: main menu state 00843690, carousel actions 005a5560.)
+- Autosculpt (issue #4; CONFIRMED by the user 2026-11-07: parts reshape, vinyls work, zone line sits on the part):
+  morphs = kit change 27 (PR #6, YevUA). Zone line = AS_SELECT_ANIM001 quads (texture set at 007b9cb0; per border
+  segment 007d8c30 -> 007d2860/007d2990 -> 007c9150) drawn by the FE quad renderer 0071c770 with the widescreen
+  menu's x scale 009e8f8c. 007c9150 projects two part vertices to pixels (0070f1f0) and turns x into menu units
+  with FMUL 640.0 (007c9214, 007c925b), so the line was squeezed towards the left edge by (4/3)/aspect, Widescreen
+  on or off (apply_hud sets the menu scale either way). Both redirected to slot 0xc2b41c (480*aspect), as the
+  cursor at 00731665. Not this line: "Zone Border FatLine Mesh" 00596a10 = the world map's territory borders.
+  YevUA's PR also reported vinyls covering the paint opaquely; that did not show in the user's test.
 - Full resolution list + Display mode (git 579ed7d, CONFIRMED by the user 2026-10-10: 1920x1080
   letterboxed correctly, no stretch; F10 (fn+F10) Window row switches modes): list =
   screen/1..4 ("(native)" on k=1) + common 4:3/16:10/16:9/21:9 sizes <= screen, sorted by
@@ -375,7 +383,8 @@ Explain findings plainly and keep commands copy-pasteable.
   00570dcd/00570ddc, CrashFix 0059606d/005960a9, car shadow slot c2b424, water reflections
   (redirects to c2b430/c2b434, 0071a9f7 MOV EDX,0xf0, NOP 0071a9fc), rain 00722cb0 (slots c2b428 =
   0.5/aspect, c2b42c = 0.5, filled in apply_hud; rain CONFIRMED by the user). Arrest blur 0x9d0584 written
-  in apply_hud. Autosculpt = the cursor redirect at 00731665 (already there).
+  in apply_hud. Autosculpt = the cursor redirect at 00731665 (already there); its zone line needed two
+  more (Mods > Autosculpt, 2026-11-07).
 - MoviePlaybackFix (mods/core/nfsc/movie.h) BACK and CONFIRMED by the user 2026-10-23 (issue #1: a
   player's game on an external drive froze on the EA logo 3x and hung in story movies; their logs show
   the movie player starting 2 threads but never the 2 video-decoder threads). 00888908 checks the audio
@@ -476,6 +485,12 @@ Ported from MW legacy-3.x on 2026-11-05 (kit tests pass apart from failures that
    graph = CAShapeLayers (green / red late bars, dashed budget). present_thread publishes the snapshot (<= 4 Hz)
    and skips PerformanceOverlay::draw unless a capture run is on (its marker lines stay Metal). Weak defaults in
    performance_overlay.cpp.
+27. Still-locked vertex buffers (PR #6 by YevUA, 2026-11-07; CONFIRMED by the user: Autosculpt reshapes parts):
+   Autosculpt's CPU morph 00558e10 locks the part's vertex buffer via 0070ed70, writes it with 0070eeb0 and ends in
+   0070eda0; both helpers call Lock (+0x2c), never Unlock (+0x30), which works on Windows (the pointer is the
+   buffer). The kit's lock is a staged copy that reached blob only at Unlock, so Metal drew the stock part.
+   gpu_sync_buffer (dx/d3d9.cpp) now copies a still-locked buffer's staged copy into blob (whole buffer dirty)
+   when they differ; one memcmp otherwise.
 21. MetalFX upscaling (git, 2026-10-31; CONFIRMED running by the user's log 2026-10-31: "gpu: MetalFX spatial
    upscaling 1920x1080 -> 3420x1924", 5907 frames, no new faults): gpu::Device::spatial_upscale (default false;
    metal_device.mm: MTLFXSpatialScaler, perceptual colour, cached per in/out size + format, needs
