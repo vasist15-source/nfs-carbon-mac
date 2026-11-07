@@ -678,6 +678,70 @@ static void test_dxt1_alpha_copy(uint32_t dev) {
         call_method(o, 2);
 }
 
+// DXT colour endpoints follow the texels, not their bounding box: a red-to-green ramp has the box corners black and
+// yellow, so every texel decoded as a shade of yellow. dxt_fit takes the principal axis and fits the 565 palette.
+// Row 0 of a 4x4 block is red, 2/3 red + 1/3 green, 1/3 red + 2/3 green, green; rows 1..3 repeat it. Opaque, and
+// half-transparent on the right block (DXT1 3-colour mode keeps the fit).
+static void test_dxt1_endpoint_fit(uint32_t dev) {
+    const uint32_t texp = sc(0x9a0), dxtp = sc(0x9a4), ssp = sc(0x9a8), dsp = sc(0x9ac), lr = sc(0x9b0);
+    CHECK(call_method(dev, 23, {8, 4, 1, 0, 21 /* A8R8G8B8 */, 1 /* MANAGED */, texp, 0}) == 0); // CreateTexture
+    CHECK(call_method(dev, 23, {8, 4, 1, 0, 0x31545844u /* DXT1 */, 1, dxtp, 0}) == 0);
+    const uint32_t tex = rd32(texp), dxt = rd32(dxtp);
+    auto want = [](uint32_t x, uint32_t c) { // c: 0 = r, 1 = g, 2 = b
+        const uint32_t t = x % 4;
+        return c == 0 ? (3 - t) * 255 / 3 : c == 1 ? t * 255 / 3 : 0u;
+    };
+    CHECK(call_method(tex, 19, {0, lr, 0, 0}) == 0); // LockRect
+    const uint32_t pitch = rd32(lr), bits = rd32(lr + 4);
+    for (uint32_t y = 0; y < 4; ++y)
+        for (uint32_t x = 0; x < 8; ++x) {
+            const uint32_t a = x >= 4 && y == 0 ? 0u : 0xffu; // right block: top row transparent
+            wr32(bits + y * pitch + x * 4, a << 24 | want(x, 0) << 16 | want(x, 1) << 8 | want(x, 2));
+        }
+    CHECK(call_method(tex, 20, {0}) == 0); // UnlockRect
+    CHECK(call_method(tex, 18, {0, ssp}) == 0); // GetSurfaceLevel
+    CHECK(call_method(dxt, 18, {0, dsp}) == 0);
+    const uint32_t ss = rd32(ssp), ds = rd32(dsp);
+    CHECK(call_shim(tramp("d3dx9_26.dll", "D3DXLoadSurfaceFromSurface"),
+                    {ds, 0, 0, ss, 0, 0, 1 /* D3DX_FILTER_NONE */, 0}) == 0);
+    CHECK(call_method(dxt, 19, {0, lr, 0, 0x10 /* READONLY */}) == 0);
+    const uint32_t blocks = rd32(lr + 4);
+    for (uint32_t bx = 0; bx < 2; ++bx) {
+        const uint32_t ends = rd32(blocks + bx * 8), idx = rd32(blocks + bx * 8 + 4);
+        const uint32_t e[2] = {ends & 0xffff, ends >> 16};
+        int pal[4][3];
+        for (int i = 0; i < 2; ++i) {
+            pal[i][0] = int((e[i] >> 11 & 31) * 255 / 31);
+            pal[i][1] = int((e[i] >> 5 & 63) * 255 / 63);
+            pal[i][2] = int((e[i] & 31) * 255 / 31);
+        }
+        const bool three = e[0] <= e[1];
+        CHECK(three == (bx == 1));
+        for (int c = 0; c < 3; ++c) {
+            pal[2][c] = three ? (pal[0][c] + pal[1][c]) / 2 : (2 * pal[0][c] + pal[1][c]) / 3;
+            pal[3][c] = (pal[0][c] + 2 * pal[1][c]) / 3;
+        }
+        for (uint32_t k = 0; k < 16; ++k) {
+            const uint32_t i = idx >> (2 * k) & 3, x = bx * 4 + k % 4;
+            if (bx == 1 && k < 4) {
+                CHECK(i == 3); // transparent
+                continue;
+            }
+            int err = 0;
+            for (int c = 0; c < 3; ++c) {
+                const int dd = pal[i][c] - int(want(x, uint32_t(c)));
+                err += dd * dd;
+            }
+            // Within ~24 per channel (4 colours), or half a palette step (~42) on the 1/3 and 2/3 texels with only
+            // 3 colours; the box fit's black / yellow palette is off by 127..255 in red or green.
+            CHECK(err < (three ? 2 * 48 * 48 : 3 * 24 * 24));
+        }
+    }
+    CHECK(call_method(dxt, 20, {0}) == 0);
+    for (uint32_t o : {ss, ds, tex, dxt})
+        call_method(o, 2);
+}
+
 static uint32_t make_device() {
     const uint32_t api = call_shim(tramp("d3d9.dll", "Direct3DCreate9"), {32});
     CHECK(api != 0);
@@ -873,6 +937,7 @@ int main() {
     test_depth_stencil_get(dev);
     test_surface_container_refs(dev);
     test_dxt1_alpha_copy(dev);
+    test_dxt1_endpoint_fit(dev);
     test_effect_booleans(dev);
     test_volume(dev);
     test_state_getters_and_readback(dev);

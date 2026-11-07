@@ -503,6 +503,10 @@ Ported from MW legacy-3.x on 2026-11-05 (kit tests pass apart from failures that
    (1024x1024 A8R8G8B8 -> DXT1: 63774 of 65536 blocks have transparent pixels) came out black around the vinyl.
    Each kind of copy is logged once: "d3dx9: D3DXLoadSurfaceFromSurface WxH fmt -> WxH fmt (N DXT1 blocks with
    transparent pixels)". d3d9_tests test_dxt1_alpha_copy (48 failures on the old encoder).
+   Endpoints (PR by YevUA, 2026-11-07): dxt_fit takes the opaque texels' principal axis and refines the two colours
+   by least squares against the 565 palette the decoder uses (3- or 4-colour); 565 packing rounds. The bounding-box
+   corners were colours no texel had (a red-green ramp became black / yellow). d3d9_tests test_dxt1_endpoint_fit
+   (22 failures on the box fit).
 21. MetalFX upscaling (git, 2026-10-31; CONFIRMED running by the user's log 2026-10-31: "gpu: MetalFX spatial
    upscaling 1920x1080 -> 3420x1924", 5907 frames, no new faults): gpu::Device::spatial_upscale (default false;
    metal_device.mm: MTLFXSpatialScaler, perceptual colour, cached per in/out size + format, needs

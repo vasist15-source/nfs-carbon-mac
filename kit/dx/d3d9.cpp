@@ -36,6 +36,7 @@
 #include <string.h>
 #include <iterator>
 #include <algorithm>
+#include <cmath>
 #include <initializer_list>
 
 #define IID_BYTES(a, b, c, d0, d1, d2, d3, d4, d5, d6, d7)                                         \
@@ -3030,12 +3031,119 @@ static bool rgba_format_known(uint32_t fmt) {
         return dxt_block_bytes(fmt) != 0;
     }
 }
-static void dxt_color_565(const uint8_t *o, uint16_t &c) {
-    c = uint16_t((o[0] >> 3) << 11 | (o[1] >> 2) << 5 | o[2] >> 3);
+static void dxt_color_565(const uint8_t *o, uint16_t &c) { // rounded, not truncated
+    c = uint16_t((o[0] * 31 + 127) / 255 << 11 | (o[1] * 63 + 127) / 255 << 5 | (o[2] * 31 + 127) / 255);
 }
 static void unpack_565(uint16_t c, uint8_t *o) {
     o[0] = uint8_t((c >> 11 & 31) * 255 / 31); o[1] = uint8_t((c >> 5 & 63) * 255 / 63);
     o[2] = uint8_t((c & 31) * 255 / 31); o[3] = 255;
+}
+// The two colours of a DXT colour block: the texels' principal axis, its
+// extremes as a first guess, then least-squares passes against the palette
+// the 565 endpoints actually give (three-colour mode when `three`). `use`
+// picks the texels that count (the opaque ones of a punch-through block).
+static void dxt_fit(const uint8_t px[16][4], const bool use[16], bool three, uint8_t hi[3], uint8_t lo[3]) {
+    float mean[3] = {0, 0, 0};
+    int n = 0;
+    for (int k = 0; k < 16; ++k)
+        if (use[k]) {
+            for (int c = 0; c < 3; ++c)
+                mean[c] += px[k][c];
+            ++n;
+        }
+    if (!n) {
+        memset(hi, 0, 3);
+        memset(lo, 0, 3);
+        return;
+    }
+    for (int c = 0; c < 3; ++c)
+        mean[c] /= n;
+    float cov[3][3] = {};
+    for (int k = 0; k < 16; ++k)
+        if (use[k])
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    cov[i][j] += (px[k][i] - mean[i]) * (px[k][j] - mean[j]);
+    float axis[3] = {0.577f, 0.577f, 0.577f};
+    for (int it = 0; it < 8; ++it) { // power iteration
+        float v[3], m = 0;
+        for (int i = 0; i < 3; ++i) {
+            v[i] = cov[i][0] * axis[0] + cov[i][1] * axis[1] + cov[i][2] * axis[2];
+            m = std::max(m, std::fabs(v[i]));
+        }
+        if (m < 1e-6f)
+            break;
+        for (int i = 0; i < 3; ++i)
+            axis[i] = v[i] / m;
+    }
+    const float len = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+    for (int i = 0; i < 3; ++i)
+        axis[i] /= len;
+    float tmin = 0, tmax = 0;
+    for (int k = 0; k < 16; ++k)
+        if (use[k]) {
+            const float t = (px[k][0] - mean[0]) * axis[0] + (px[k][1] - mean[1]) * axis[1] +
+                            (px[k][2] - mean[2]) * axis[2];
+            tmin = std::min(tmin, t);
+            tmax = std::max(tmax, t);
+        }
+    float e[2][3];
+    for (int c = 0; c < 3; ++c) {
+        e[0][c] = mean[c] + axis[c] * tmax;
+        e[1][c] = mean[c] + axis[c] * tmin;
+    }
+    const float steps4[4] = {0, 1, 1.0f / 3, 2.0f / 3}, steps3[3] = {0, 1, 0.5f};
+    const float *steps = three ? steps3 : steps4;
+    const int nsteps = three ? 3 : 4;
+    for (int pass = 0; pass < 2; ++pass) {
+        float q[2][3]; // the endpoints as the decoder will see them
+        for (int i = 0; i < 2; ++i) {
+            uint8_t b[3], u[4];
+            for (int c = 0; c < 3; ++c)
+                b[c] = uint8_t(std::min(255.0f, std::max(0.0f, e[i][c] + 0.5f)));
+            uint16_t c565;
+            dxt_color_565(b, c565);
+            unpack_565(c565, u);
+            for (int c = 0; c < 3; ++c)
+                q[i][c] = u[c];
+        }
+        float aa = 0, bb = 0, ab = 0, ax[3] = {}, bx[3] = {};
+        for (int k = 0; k < 16; ++k) {
+            if (!use[k])
+                continue;
+            float best = 1e30f, t = 0;
+            for (int s = 0; s < nsteps; ++s) {
+                float d = 0;
+                for (int c = 0; c < 3; ++c) {
+                    const float p = q[0][c] + (q[1][c] - q[0][c]) * steps[s] - px[k][c];
+                    d += p * p;
+                }
+                if (d < best) {
+                    best = d;
+                    t = steps[s];
+                }
+            }
+            const float a = 1 - t, b = t;
+            aa += a * a;
+            bb += b * b;
+            ab += a * b;
+            for (int c = 0; c < 3; ++c) {
+                ax[c] += a * px[k][c];
+                bx[c] += b * px[k][c];
+            }
+        }
+        const float det = aa * bb - ab * ab;
+        if (std::fabs(det) < 1e-6f)
+            break;
+        for (int c = 0; c < 3; ++c) {
+            e[0][c] = std::min(255.0f, std::max(0.0f, (ax[c] * bb - bx[c] * ab) / det));
+            e[1][c] = std::min(255.0f, std::max(0.0f, (bx[c] * aa - ax[c] * ab) / det));
+        }
+    }
+    for (int c = 0; c < 3; ++c) {
+        hi[c] = uint8_t(e[0][c] + 0.5f);
+        lo[c] = uint8_t(e[1][c] + 0.5f);
+    }
 }
 static void surface_to_rgba(ComObj *s, std::vector<uint8_t> &out) {
     const uint32_t w = s->width, h = s->height, fmt = s->rmask;
@@ -3102,8 +3210,10 @@ static uint32_t rgba_to_surface(const std::vector<uint8_t> &in, ComObj *d, uint8
     const uint32_t w = d->width, h = d->height, fmt = d->rmask;
     uint32_t clear_blocks = 0;
     if (uint32_t block = dxt_block_bytes(fmt)) {
-        // Endpoints at the block's colour bounding box: plain, but never wrong
-        // in kind, and these copies are textures the game already ships.
+        // Colour endpoints from the texels' principal axis, refined by least
+        // squares against the 565 palette the decoder will actually use
+        // (dxt_fit); the bounding-box corners picked colours no texel had, so
+        // vinyl edges and gradients came out banded or tinted.
         // DXT1 keeps 1-bit alpha the way D3DX does: a pixel under half alpha is
         // the block's transparent colour (3-colour mode), and the endpoints come
         // from the other pixels. NFSC draws a car's vinyls into an A8R8G8B8 skin
@@ -3115,70 +3225,41 @@ static uint32_t rgba_to_surface(const std::vector<uint8_t> &in, ComObj *d, uint8
         for (uint32_t by = 0; by < bh; ++by)
             for (uint32_t bx = 0; bx < bw; ++bx) {
                 uint8_t px[16][4], lo[4] = {255, 255, 255, 255}, hi[4] = {0, 0, 0, 0};
-                bool clear = false, opaque = false;
+                bool use[16], clear = false;
                 for (uint32_t k = 0; k < 16; ++k) {
                     const uint32_t x = std::min(bx * 4 + k % 4, w - 1), y = std::min(by * 4 + k / 4, h - 1);
                     memcpy(px[k], &in[(size_t(y) * w + x) * 4], 4);
-                    if (dxt1 && px[k][3] < 128) {
-                        clear = true;
-                        continue;
-                    }
-                    opaque = true;
-                    for (int c = 0; c < 4; ++c) {
-                        lo[c] = std::min(lo[c], px[k][c]);
-                        hi[c] = std::max(hi[c], px[k][c]);
-                    }
+                    lo[3] = std::min(lo[3], px[k][3]); // alpha range for DXT5
+                    hi[3] = std::max(hi[3], px[k][3]);
+                    use[k] = !dxt1 || px[k][3] >= 128;
+                    clear |= !use[k];
                 }
                 uint8_t *b = dst + size_t(by) * d->pitch + size_t(bx) * block;
                 uint8_t *cb = block == 8 ? b : b + 8;
-                if (clear) { // DXT1 3-colour mode: c0 <= c1, index 3 = transparent black
+                if (clear) // DXT1 3-colour mode: c0 <= c1, index 3 = transparent black
                     ++clear_blocks;
-                    uint16_t c0 = 0, c1 = 0;
-                    if (opaque) {
-                        dxt_color_565(lo, c0);
-                        dxt_color_565(hi, c1);
-                        if (c0 > c1)
-                            std::swap(c0, c1);
-                    }
-                    uint8_t pal[3][4];
-                    unpack_565(c0, pal[0]);
-                    unpack_565(c1, pal[1]);
-                    for (int c = 0; c < 3; ++c)
-                        pal[2][c] = uint8_t((pal[0][c] + pal[1][c]) / 2);
-                    uint32_t bits = 0;
-                    for (uint32_t k = 0; k < 16; ++k) {
-                        int best = 3;
-                        if (px[k][3] >= 128) {
-                            int bestd = 1 << 30;
-                            for (int i = 0; i < 3; ++i) {
-                                int dd = 0;
-                                for (int c = 0; c < 3; ++c)
-                                    dd += (px[k][c] - pal[i][c]) * (px[k][c] - pal[i][c]);
-                                if (dd < bestd) { bestd = dd; best = i; }
-                            }
-                        }
-                        bits |= uint32_t(best) << (2 * k);
-                    }
-                    cb[0] = uint8_t(c0); cb[1] = uint8_t(c0 >> 8); cb[2] = uint8_t(c1); cb[3] = uint8_t(c1 >> 8);
-                    memcpy(cb + 4, &bits, 4);
-                    continue;
-                }
+                dxt_fit(px, use, clear, hi, lo);
                 uint16_t c0, c1;
                 dxt_color_565(hi, c0);
                 dxt_color_565(lo, c1);
-                if (c0 < c1)
+                if (clear ? c0 > c1 : c0 < c1)
                     std::swap(c0, c1);
                 uint8_t pal[4][4];
                 unpack_565(c0, pal[0]);
                 unpack_565(c1, pal[1]);
                 for (int c = 0; c < 3; ++c) {
-                    pal[2][c] = uint8_t((2 * pal[0][c] + pal[1][c]) / 3);
+                    pal[2][c] = clear ? uint8_t((pal[0][c] + pal[1][c]) / 2)
+                                      : uint8_t((2 * pal[0][c] + pal[1][c]) / 3);
                     pal[3][c] = uint8_t((pal[0][c] + 2 * pal[1][c]) / 3);
                 }
                 uint32_t bits = 0;
                 for (uint32_t k = 0; k < 16; ++k) {
+                    if (!use[k]) {
+                        bits |= 3u << (2 * k);
+                        continue;
+                    }
                     int best = 0, bestd = 1 << 30;
-                    for (int i = 0; i < 4; ++i) {
+                    for (int i = 0; i < (clear ? 3 : 4); ++i) {
                         int dd = 0;
                         for (int c = 0; c < 3; ++c)
                             dd += (px[k][c] - pal[i][c]) * (px[k][c] - pal[i][c]);
