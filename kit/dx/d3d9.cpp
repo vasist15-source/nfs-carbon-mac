@@ -3064,8 +3064,18 @@ static void dxt_fit(const uint8_t px[16][4], const bool use[16], bool three, uin
             for (int i = 0; i < 3; ++i)
                 for (int j = 0; j < 3; ++j)
                     cov[i][j] += (px[k][i] - mean[i]) * (px[k][j] - mean[j]);
-    float axis[3] = {0.577f, 0.577f, 0.577f};
-    for (int it = 0; it < 8; ++it) { // power iteration
+    // Power iteration from the covariance row of the widest channel: a fixed
+    // start such as grey (1,1,1) is exactly at right angles to the axis of a
+    // block whose channels sum to a constant (a red-to-green ramp), and the
+    // iteration would stop there with both endpoints at the mean.
+    int wide = 0;
+    for (int i = 1; i < 3; ++i)
+        if (cov[i][i] > cov[wide][wide])
+            wide = i;
+    float axis[3] = {cov[wide][0], cov[wide][1], cov[wide][2]};
+    if (cov[wide][wide] < 1e-6f) // one colour: any axis will do
+        axis[0] = axis[1] = axis[2] = 0.577f;
+    for (int it = 0; it < 8; ++it) {
         float v[3], m = 0;
         for (int i = 0; i < 3; ++i) {
             v[i] = cov[i][0] * axis[0] + cov[i][1] * axis[1] + cov[i][2] * axis[2];
