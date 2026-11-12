@@ -62,6 +62,10 @@ Third-party work this port reimplements:
   source (v3.0.1) was read for the game addresses and behaviour of the options in
   mods/core/nfsc/extras.h and game.toml; none of its code is used.
 
+- NFSC HD Reflections by Aero_ (github.com/AeroWidescreen/NFSHDReflections, GPL-3). Its source
+  (SOURCE/NFSC) was read for the game addresses and what each change does, for
+  mods/core/nfsc/hd_refl.h and game.toml; none of its code is used.
+
 - NFS Carbon Remastered UI by BadassBaboon (nfsmods.xyz/mod/1095) is not included: the Setup
   app downloads it on the player's Mac only when its checkbox is ticked. It is installed by
   tools/setup_kit/hd_ui.py, which runs the mod's own Endscript; the Endscript commands and the

@@ -91,6 +91,34 @@ operand_redirects = [
     { at = 0x0071a9af, from = 0x00ab0acc, to = 0x00c2b430 },
     { at = 0x0071aa20, from = 0x00a63af8, to = 0x00c2b434 },
     { at = 0x0071aa70, from = 0x00a63af8, to = 0x00c2b434 },
+    # HD reflections (core.nfsc hd_refl.h, from Aero_'s NFSC HD Reflections): the sky in the
+    # reflections (scale 0.7 per view; the road reflection's 0.06 and 300.0) and the size the road
+    # reflection's blur target is made from.
+    { at = 0x007afcb5, from = 0x00a732ac, to = 0x00c2b814 },
+    { at = 0x007afcc1, from = 0x00a732ac, to = 0x00c2b814 },
+    { at = 0x007afccf, from = 0x00a732ac, to = 0x00c2b814 },
+    { at = 0x007afc39, from = 0x009ef050, to = 0x00c2b818 },
+    { at = 0x007afcf0, from = 0x009ef05c, to = 0x00c2b81c },
+    { at = 0x007130fc, from = 0x00ab0ac8, to = 0x00c2b82c },
+    { at = 0x007130e4, from = 0x00ab0acc, to = 0x00c2b830 },
+    # The mod's other options (hd_refl.h): the game state the reflection code compares with 6 (real
+    # reflections in menus), the cube faces' far clip, the car reflection brightness (six FMUL 0.5),
+    # the traffic signs' draw distance, the road reflection's blur strength (DownScale4x4 and
+    # TwoPassBlur's FDIVR 1.0) and the colour-grading LUT (FILTER0).
+    { at = 0x0072ecd0, from = 0x00a99bbc, to = 0x00c2b870 },
+    { at = 0x0072e4de, from = 0x00a99bbc, to = 0x00c2b870 },
+    { at = 0x00721a90, from = 0x00a63b14, to = 0x00c2b87c },
+    { at = 0x0071e1a8, from = 0x009c2888, to = 0x00c2b880 },
+    { at = 0x0071e1be, from = 0x009c2888, to = 0x00c2b880 },
+    { at = 0x0071e1d4, from = 0x009c2888, to = 0x00c2b880 },
+    { at = 0x0071e1f9, from = 0x009c2888, to = 0x00c2b880 },
+    { at = 0x0071e22f, from = 0x009c2888, to = 0x00c2b880 },
+    { at = 0x0071e249, from = 0x009c2888, to = 0x00c2b880 },
+    { at = 0x0079b255, from = 0x009ee7f0, to = 0x00c2b884 },
+    { at = 0x0073cc29, from = 0x009c2478, to = 0x00c2b864 },
+    { at = 0x0073cc3d, from = 0x009c2478, to = 0x00c2b864 },
+    { at = 0x0073c97c, from = 0x009c2478, to = 0x00c2b868 },
+    { at = 0x0071d700, from = 0x00b43068, to = 0x00c2b86c },
 ]
 # What NFSCarbon.WidescreenFix (Frontend.ixx, FixHUD) patched in the code
 # bytes. The HUD centre (320.0) six HUD set-ups store is read from a slot
@@ -149,7 +177,7 @@ instruction_patches = [
     { at = 0x0059606d, text = "NOP" },
     { at = 0x005960a9, text = "NOP" },
     # water reflections: the target height is 240 (the fix's n240 + NOP of the SHL)
-    { at = 0x0071a9f7, text = "MOV EDX,0xf0" },
+    { at = 0x0071a9f7, text = "MOV EDX,dword ptr [0x00c2b800]" },  # 240, or HD reflections' height
     { at = 0x0071a9fc, text = "NOP" },
     # Rain droplets on the camera (the fix's RainDropletsHook / YScaleHook, 00722cb0):
     # x = size * kx + x0 and y = size * ky + y0, kx/ky from slots core.nfsc fills
@@ -184,6 +212,46 @@ instruction_patches = [
     # More saves (Extra Options does these always): no "too many saves" stop at 10, every save listed.
     { at = 0x005b729e, text = "NOP" },
     { at = 0x005ac479, text = "JMP 0x005ac492" },
+    # HD reflections (core.nfsc hd_refl.h; slots 0x00c2b800.., defaults below = the game's own).
+    # Road reflection view size (320 x 240 for both of 0071bca0's cases) = its target's size.
+    { at = 0x0071bdee, text = "MOV dword ptr [ECX + 0x14],dword ptr [0x00c2b434]" },
+    { at = 0x0071bdf5, text = "MOV dword ptr [ECX + 0x18],dword ptr [0x00c2b800]" },
+    { at = 0x0071be25, text = "MOV dword ptr [ECX + 0x14],dword ptr [0x00c2b434]" },
+    { at = 0x0071be2c, text = "MOV dword ptr [ECX + 0x18],dword ptr [0x00c2b800]" },
+    # car reflection cube map: (AND 0xf0) + 16 = 256
+    { at = 0x0070de38, text = "AND EAX,dword ptr [0x00c2b804]" },
+    # rear-view mirror: 1 << floor(log2(size / 3)), the result read from slots core.nfsc computes
+    { at = 0x0070db03, text = "MOV EDX,dword ptr [0x00c2b808]" },
+    { at = 0x0070db08, text = "NOP" },
+    { at = 0x0070db61, text = "MOV EDX,dword ptr [0x00c2b80c]" },
+    { at = 0x0070db66, text = "NOP" },
+    # reflection detail: TEST CH,0x30 / OR EDX,0x8002180, and the view id -> render-flag case table
+    { at = 0x0079fb5a, text = "TEST dword ptr [0x00c2b820],ECX" },
+    { at = 0x0079aedb, text = "OR EDX,dword ptr [0x00c2b824]" },
+    { at = 0x0079aeaa, text = "MOVZX ESI,byte ptr [EDI + 0xc2b8ff]" },
+    # the sky: views above 3 take the main view's path when the slot is raised
+    { at = 0x007afca1, text = "CMP EAX,dword ptr [0x00c2b810]" },
+    # shader constant 0x37 while driving, [0x00a6c228] 0.4 (in 0073e180, which only the translator's
+    # recovery finds, so a patch: operand redirects only reach Ghidra's listings)
+    { at = 0x0073e1b0, text = "MOV EAX,dword ptr [0x00c2b828]" },
+    # the game state compared with 6 in 0073e180 (real reflections in menus)
+    { at = 0x0073e197, text = "MOV EAX,dword ptr [0x00c2b870]" },
+    # mirror on in new profiles / Restore Defaults (0 in the game)
+    { at = 0x004bd50f, text = "MOV dword ptr [EDX],dword ptr [0x00c2b888]" },
+    # mesh shader override in 00729320: a mesh without its own table uses the table at slot 0x00c2b834
+    # (all -1 = none; type 1 -> shader 3 while a cube face is drawn). Same 11 instructions as before:
+    # the JZ that skipped meshes without a table is now the CMOVZ.
+    { at = 0x00729440, text = "MOV EDI,dword ptr [ESI + 0x34]" },
+    { at = 0x00729442, text = "TEST EAX,EAX" },
+    { at = 0x00729445, text = "CMOVZ EAX,dword ptr [0x00c2b834]" },
+    # brake flare size: id 1 -> 360.0; the cube faces 180.0 when slot 0x00c2b858 holds their id
+    { at = 0x0074d9c2, text = "CMP EAX,dword ptr [0x00c2b858]" },
+    { at = 0x0074d9cd, text = "MOV dword ptr [ESP + 0x18],dword ptr [0x00c2b85c]" },
+    # flare turn direction (1.0, -1.0 in the cube faces without flare rotation)
+    { at = 0x0074de9a, text = "MOV dword ptr [ESP + 0x14],dword ptr [0x00c2b860]" },
+    # flares enlarged in the mirror (id 3) and the cube faces (up to 0x1b): ids from slots
+    { at = 0x00750a38, text = "CMP EAX,dword ptr [0x00c2b874]" },
+    { at = 0x00750a42, text = "CMP EAX,dword ptr [0x00c2b878]" },
 ]
 # The slots' values without core.nfsc: the original constants (the aspect
 # integers are copied from the game's own at run time by core.nfsc; 3/4 here
@@ -223,6 +291,67 @@ data_seeds = [
     { addr = 0x00c2b720, value = 1 },      # busted-screen pixelation
     { addr = 0x00c2b724, value = 7 },      # headlights glare mask
     { addr = 0x00c2b728, float = 1.0 },    # headlight beams
+    # HD reflections (core.nfsc hd_refl.h), the game's own values.
+    { addr = 0x00c2b800, value = 240 },        # road reflection height
+    { addr = 0x00c2b804, value = 0xf0 },       # car reflection cube map size - 16
+    { addr = 0x00c2b808, value = 512 },        # mirror width (core.nfsc: from the game's size)
+    { addr = 0x00c2b80c, value = 256 },        # mirror height
+    { addr = 0x00c2b810, value = 3 },          # sky: last view on the main path
+    { addr = 0x00c2b814, float = 0.7 },        # sky scale [0x00a732ac]
+    { addr = 0x00c2b818, value = 0x3d75c28f }, # road reflection sky scale 0.06 [0x009ef050]
+    { addr = 0x00c2b81c, float = 300.0 },      # road reflection sky turn [0x009ef05c]
+    { addr = 0x00c2b820, value = 0x3000 },     # reflection detail mask (TEST CH,0x30)
+    { addr = 0x00c2b824, value = 0x8002180 },  # cube faces' render flags
+    { addr = 0x00c2b828, value = 0x3ecccccd }, # shader constant 0x37 while driving, 0.4 [0x00a6c228]
+    { addr = 0x00c2b82c, value = 1280 },       # blur target from width (core.nfsc: the game's)
+    { addr = 0x00c2b830, value = 960 },        # ... and height
+    { addr = 0x00c2b834, value = 0x00c2b980 }, # mesh shader fallback table: none
+    { addr = 0x00c2b858, value = 1 },          # brake flare: view id that gets the size below
+    { addr = 0x00c2b85c, float = 360.0 },      # ... 360.0
+    { addr = 0x00c2b860, float = 1.0 },        # flare turn
+    { addr = 0x00c2b864, float = 1.0 },        # DownScale4x4 strength
+    { addr = 0x00c2b868, float = 1.0 },        # TwoPassBlur strength
+    { addr = 0x00c2b874, value = 3 },          # flares enlarged in view 3 (mirror)
+    { addr = 0x00c2b878, value = 0x1b },       # ... and up to view 0x1b (cube faces)
+    { addr = 0x00c2b87c, float = 100.0 },      # cube faces' far clip [0x00a63b14]
+    { addr = 0x00c2b880, float = 0.5 },        # car reflection brightness
+    { addr = 0x00c2b884, float = 22500.0 },    # traffic sign distance [0x009ee7f0]
+    { addr = 0x00c2b980, value = 0xffffffff },
+    { addr = 0x00c2b984, value = 0xffffffff },
+    { addr = 0x00c2b988, value = 0xffffffff },
+    { addr = 0x00c2b98c, value = 0xffffffff },
+    { addr = 0x00c2b990, value = 0xffffffff },
+    { addr = 0x00c2b994, value = 0xffffffff },
+    { addr = 0x00c2b998, value = 0xffffffff },
+    { addr = 0x00c2b99c, value = 0xffffffff },
+    { addr = 0x00c2b9a0, value = 0xffffffff },
+    { addr = 0x00c2b9c0, value = 0xffffffff },
+    { addr = 0x00c2b9c4, value = 3 },
+    { addr = 0x00c2b9c8, value = 0xffffffff },
+    { addr = 0x00c2b9cc, value = 0xffffffff },
+    { addr = 0x00c2b9d0, value = 0xffffffff },
+    { addr = 0x00c2b9d4, value = 0xffffffff },
+    { addr = 0x00c2b9d8, value = 0xffffffff },
+    { addr = 0x00c2b9dc, value = 0xffffffff },
+    { addr = 0x00c2b9e0, value = 0xffffffff },
+    # view id -> render-flag case (id - 1; 0xff = none): byte 0x00c2b8ff is view 0
+    { addr = 0x00c2b8fc, value = 0xff000000 },
+    { addr = 0x00c2b900, value = 0x03020100 },
+    { addr = 0x00c2b904, value = 0x07060504 },
+    { addr = 0x00c2b908, value = 0x0b0a0908 },
+    { addr = 0x00c2b90c, value = 0x0f0e0d0c },
+    { addr = 0x00c2b910, value = 0x13121110 },
+    { addr = 0x00c2b914, value = 0x17161514 },
+    { addr = 0x00c2b918, value = 0xff1a1918 },
+    { addr = 0x00c2b91c, value = 0xffffffff },
+    { addr = 0x00c2b920, value = 0xffffffff },
+    { addr = 0x00c2b924, value = 0xffffffff },
+    { addr = 0x00c2b928, value = 0xffffffff },
+    { addr = 0x00c2b92c, value = 0xffffffff },
+    { addr = 0x00c2b930, value = 0xffffffff },
+    { addr = 0x00c2b934, value = 0xffffffff },
+    { addr = 0x00c2b938, value = 0xffffffff },
+    { addr = 0x00c2b93c, value = 0xffffffff },
 ]
 
 # NFSC.exe imports the Visual C++ 2003 runtime from msvcr71.dll and

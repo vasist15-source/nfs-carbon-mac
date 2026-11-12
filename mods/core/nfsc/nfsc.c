@@ -82,7 +82,7 @@ POP_MOD_DECLARE_ABI();
 #define HUD_RIGHT_GROUP 0x5D0101F1u
 
 static const PopModApi *g_api;
-static uint32_t g_hooks[29];
+static uint32_t g_hooks[56];
 static int g_widescreen = 1;
 static int g_scaling = 1;
 static uint32_t g_w = 1280, g_h = 720;
@@ -128,6 +128,7 @@ static void log_line(const char *text) {
 #include "camera.h" /* look around with the right stick */
 #include "extras.h" /* options from the NFSC Extra Options mod */
 #include "smooth_sim.h" /* one physics step on every on-time frame */
+#include "hd_refl.h" /* HD reflections (Aero_'s NFSC HD Reflections) */
 
 /* ---- the resolution list --------------------------------------------------
  * The host scales the frame smoothly to the window, aspect kept (game.toml
@@ -463,12 +464,16 @@ static void setup_projection(const PopModApi *api, pop_cpu_v1 *cpu, PopHookInvoc
     (void)api;
     (void)inv;
     (void)user;
-    if (!g_widescreen) {
-        fov_original();
-        return;
-    }
     const uint32_t view = get_u32(cpu->esp + 4);
     const uint32_t id = view ? get_u32(view + 8) : 0;
+    if (!g_widescreen || hd_refl_cube_view(id)) {
+        fov_original();
+        if (hd_refl_cube_view(id)) { /* hd_refl.h: a square face with the game's own terms */
+            g_api->guest_write_u32(g_api, SLOT_ASPECT_NUM, 1);
+            g_api->guest_write_u32(g_api, SLOT_ASPECT_DEN, 1);
+        }
+        return;
+    }
     /* The aspect term: 1.0, or 0.925 for the rear-view mirror (view 3),
      * written as the integer ratio the game divides. */
     g_api->guest_write_u32(g_api, SLOT_ASPECT_NUM, id == 3 ? 37u : 1u);
@@ -519,6 +524,7 @@ PopModStatus pop_mod_init(const PopModApi *api) {
     camera_install();
     extras_install();
     smooth_sim_install();
+    hd_refl_install();
     PopModStatus s = install(SETUP_PROJECTION, setup_projection, POP_HOOK_BEFORE, 0);
     if (s != POP_OK)
         return s;

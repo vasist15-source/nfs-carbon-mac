@@ -170,6 +170,33 @@ Explain findings plainly and keep commands copy-pasteable.
   [0xa99bbc] == 6. Heat bounds: callsite BEFORE hook (slot 26) on clamp 004010e0 (value, lo, hi) from
   00449a91 (ret 00449a96) in the pursuit update (fn ~00449920, not in the analysis). Not done: harder
   Quick Race pursuits (its patches are conditional jumps, not switchable), load-any-save.
+- HD reflections (mods/core/nfsc/hd_refl.h, 2026-11-11; user: works 2026-11-12): Aero_'s NFSC HD Reflections
+  (github.com/AeroWidescreen/NFSHDReflections SOURCE/NFSC, GPL-3, ~/tmp clone, NOTICE) read for addresses only. Its .asi
+  can't load in the port, so: setting hd_reflections (Graphics, restart, default on); slots 0xc2b800..0xc2b830 + view
+  table 0xc2b8fc..0xc2b93f (data_seeds = game values). Sizes from the game's resolution (never below vanilla), filled by
+  BEFORE hooks (slots 29-32) on the creators: road 0071a950 (w = slot c2b434, h = c2b800 via 0071a9f7; view size
+  patches 0071bdee/f5, 0071be25/2c), car cube 0070de00 (AND slot c2b804 at 0070de38, +16), mirror 0070dab0 (MOV EDX
+  slots at 0070db03/61, SHLs NOP'd; off = 1 << floor(log2(size/3)) computed in C), PiP .data 0xa63b00/04, road blur
+  007130e0 (its w/h reads -> 2w/2h = the mod's NOP'd SARs). Detail while driving (tick from pad.h): 0079fb5a TEST
+  [c2b820],ECX 0x1000; 0079aedb OR [c2b824] 0x8002; mirror LOD 0079aeaa MOVZX ESI,[EDI+0xc2b8ff] table (entry 2 -> 0).
+  Sky: 007afca1 CMP [c2b810] = INT_MAX, scale slot c2b814 per view (BEFORE 007afb70, slot 34: 0.25 for views > 3),
+  road sky 0x9ef050/0x9ef05c -> 2.0/1.0. Cube faces 0x16..0x1b projected square with the game's own terms
+  (setup_projection). Shader const 0x37 = 0.0 while driving: 0073e1b0 is in 0073e180, which only the translator's
+  recovery finds -> operand_redirects can't reach it (they only see Ghidra listings); instruction_patches can.
+  REST PORTED 2026-11-11 (built, NOT yet run; all in hd_refl.h's header comment): Mods > Visual settings
+  reflection_details (road cars/lights via callsite hooks + guest_call, headlight/flare exclusion, mirror particles),
+  reflection_contrast (cube faces: fallback mesh shader table slot c2b834 via 11-instruction rewrite of 00729440..,
+  hooks on cube face 0072e460; constant 0x8b at three 00713b30 callsites; brake flare CMP/MOV slots in 0074d330),
+  traffic_sign_fix, env_map, true_flare_size (CMP-with-slot so a jump is never taken), flare_rotation,
+  reflection_blur, car_reflection_brightness, real_fe_reflections (state slot c2b870 set before 0072eba0),
+  realistic_chrome, visual_treatment_race/_menu, pause_blur. hd_reflections also: mirror on in new profiles
+  (004bd50f), QRACE face-name swap (AFTER 00572c20, only while QRACE). Hook slots 35-55 (g_hooks[56]).
+  User: "works" 2026-11-12 (log 20261112-140542: every hook installed, menus + chrome on, sizes 1920x1080 / car 1080
+  / mirror 960x256 / PiP 540; ~60 fps, the two 33-40 fps minutes held F10 pauses of 26 s / 20 s; clean exit).
+  hd_reflections = MASTER switch (Mods > Visual, first row; 2026-11-12): off -> every option is the game's at once
+  (hd_refl_tick reads it live), sizes/detail/sky after a restart.
+  Not ported: CopFlareScale (per-flare-type inside a loop). Trick: instruction_patches accept mem-to-mem MOV and
+  CMOVcc; operand_redirects only reach Ghidra-listed functions.
 - Online menu entries: DONE in mods/core/nfsc/online.h (setting hide_online, default on): the carousel
   builder 0083c420 adds items with 005b2320; the Quick Match / Custom Match adds (return 0083c611 /
   0083c5c3) are skipped. (Old notes: main menu state 00843690, carousel actions 005a5560.)

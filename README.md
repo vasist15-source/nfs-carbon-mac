@@ -51,7 +51,8 @@ icons).
     The game pauses while the page is open.
   - Mods: skip intro movies, hide the closed online modes, how much you see to the sides, no
     rubberbanding (opponents don't catch up), and cheats (off by default: infinite nitrous and
-    speedbreaker, engine power, opponent engine power).
+    speedbreaker, engine power, opponent engine power), and HD Reflections with one switch for all of
+    its options.
   - Controller: console layout on/off, looking around with the right stick on/off, rumble
     strength, and which button names to show (automatic, Xbox, PlayStation, Switch Pro).
 - **Controllers** (a port of NFS-XtendedInput): the console layout (RT gas, LT brake, A handbrake,
@@ -66,6 +67,12 @@ icons).
   the fonts and cursor kept at their original size as Aero_'s HD Content Support does on Windows.
   Menus, HUD, fonts, the world map, minimap, track maps and the neon barrier arrows on the tracks
   are HD. Adds about 300 MB to the app.
+- **HD reflections** (a port of Aero_'s NFSC HD Reflections, on by default): car paint, road and
+  rear-view mirror reflections at the game's resolution instead of 256×256 / 320×240, with more
+  detail and the sky in them; cars and their coloured lights in the road's reflection; Xbox 360 or
+  PS3 reflection contrast; brighter traffic signs. The mod's other options are on F10 → Mods →
+  Visual (mirror smoke, real reflections in menus, chrome, flare size and rotation, blur,
+  brightness, colour grading, pause blur), and one switch turns all of it off.
 
 
 ## What you need
@@ -102,7 +109,7 @@ changes (history in `docs/kit-patches/` and git). This repository adds what make
 - `game.toml`: the game's identity, extra entry points, and translate-time fixes (operand redirects,
   instruction patches) that stand in for the binary patches PC mods make.
 - `mods/core/nfsc/`: the built-in mod (widescreen, resolution list, controller layout, prompts,
-  rumble and right-stick camera, cheats).
+  rumble and right-stick camera, HD reflections, cheats).
 - `tools/`: Ghidra analysis, DLL rebasing, build wrappers, and `setup_kit/` (packaging, launcher, icon).
 - `CLAUDE.md`: the bring-up notes — every problem found, its evidence and its fix.
 
@@ -115,6 +122,8 @@ The approach and much of the setup follow the
 - **Need for Speed: Most Wanted Mac port** — elforeign, whose setup, mod and controller work this port
   started from
 - **NFSCarbon.WidescreenFix** (WidescreenFixesPack) — ThirteenAG, MIT; reimplemented in `mods/core/nfsc`
+- **NFSC HD Reflections** — Aero_, GPL-3; its source was read for addresses, reimplemented in
+  `mods/core/nfsc/hd_refl.h`
 - **NFS-XtendedInput** — xan1242 (Lovro Pleše) and Berkay Yiğit, MIT; button icons by Aero_ (not
   included; see NOTICE)
 
